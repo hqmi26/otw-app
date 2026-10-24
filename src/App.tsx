@@ -1,0 +1,492 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import MapView, { type MapMode } from './components/MapView';
+import IntroScreen from './components/IntroScreen';
+import LoginScreen from './components/LoginScreen';
+import HomeScreen from './components/HomeScreen';
+import SearchScreen from './components/SearchScreen';
+import RouteSheet from './components/RouteSheet';
+import NavigationView from './components/NavigationView';
+import AccountScreen from './components/AccountScreen';
+import FamilyScreen from './components/FamilyScreen';
+import ReportSheet from './components/ReportSheet';
+import SavePlaceSheet from './components/SavePlaceSheet';
+import { CheckIcon } from './components/icons';
+import { getRoutes, type Place, type Route } from './lib/api';
+import { bearing, distance, formatDistance, type LngLat } from './lib/geo';
+import {
+  HAZARDS,
+  REPORT_LIFETIME_MS,
+  type HazardReport,
+  type HazardType,
+  type Profile,
+  type SavedKind,
+  type SavedPlace,
+} from './lib/models';
+import { speak, stopSpeaking } from './lib/voice';
+import { useGeolocation } from './hooks/useGeolocation';
+import { useTheme } from './hooks/useTheme';
+import { useRecents } from './hooks/useRecents';
+import { useStored } from './hooks/useStored';
+import { usePresence } from './hooks/usePresence';
+import { useNavProgress, useSimulatedDrive } from './hooks/useNavigation';
+
+type Screen = 'home' | 'search' | 'route' | 'nav' | 'family' | 'account' | 'report' | 'save';
+/** Screens that open as a sheet over whatever is underneath. */
+const MODALS: Screen[] = ['report', 'save'];
+
+/** Where trips start when the browser has no GPS, e.g. testing on a laptop. */
+const DEMO_START: LngLat = [101.7119, 3.1579]; // KLCC
+/** Add ?sim to the address to fake the drive even when GPS works. */
+const FORCE_SIM = new URLSearchParams(window.location.search).has('sim');
+const DEMO_SPEEDS = [1, 4, 10];
+
+/** Pixels the UI covers at the top/bottom, so the map centres in the visible gap. */
+const INSETS: Partial<Record<Screen, { top: number; bottom: number }>> = {
+  home: { top: 130, bottom: 300 },
+  route: { top: 80, bottom: 330 },
+  nav: { top: 200, bottom: 120 },
+};
+const NO_INSETS = { top: 0, bottom: 0 };
+
+const lowerFirst = (s: string) => s.charAt(0).toLowerCase() + s.slice(1);
+const isArray = (v: unknown) => Array.isArray(v);
+
+export default function App() {
+  const { theme, toggle: toggleTheme } = useTheme();
+  const geo = useGeolocation();
+  const { recents, add: addRecent } = useRecents();
+  const [profile, setProfile] = useStored<Profile | null>('otw-profile', null, (v) => v == null || typeof v === 'object');
+  const [saved, setSaved] = useStored<SavedPlace[]>('otw-saved', [], isArray);
+  const [reports, setReports] = useStored<HazardReport[]>('otw-reports', [], isArray);
+
+  // --- Opening: logo intro, then login the first time. ---
+  const [phase, setPhase] = useState<'intro' | 'login' | 'app'>('intro');
+  const hasProfile = useRef(profile != null);
+  hasProfile.current = profile != null;
+  const finishIntro = useCallback(
+    () => setPhase((ph) => (ph === 'intro' ? (hasProfile.current ? 'app' : 'login') : ph)),
+    [],
+  );
+
+  // --- Screens. Kept in browser history so the phone's back gesture works. ---
+  const [stack, setStack] = useState<Screen[]>(['home']);
+  const stackRef = useRef(stack);
+  stackRef.current = stack;
+  const lastMove = useRef<'push' | 'pop'>('push');
+  const top = stack[stack.length - 1];
+  const base = [...stack].reverse().find((s) => !MODALS.includes(s)) ?? 'home';
+
+  useEffect(() => {
+    window.history.replaceState({ depth: 0 }, '');
+    const onPop = (e: PopStateEvent) => {
+      const depth = typeof e.state?.depth === 'number' ? e.state.depth : 0;
+      lastMove.current = 'pop';
+      setStack((s) => s.slice(0, depth + 1));
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
+
+  const go = useCallback((next: Screen) => {
+    const nextStack = [...stackRef.current, next];
+    window.history.pushState({ depth: nextStack.length - 1 }, '');
+    lastMove.current = 'push';
+    setStack(nextStack);
+  }, []);
+  const back = useCallback(() => window.history.back(), []);
+  const backTo = useCallback((depth: number) => {
+    const steps = stackRef.current.length - 1 - depth;
+    if (steps > 0) window.history.go(-steps);
+  }, []);
+
+  // --- Little confirmation messages ---
+  const [toast, setToast] = useState<{ text: string; id: number } | null>(null);
+  const showToast = useCallback((text: string) => setToast({ text, id: Date.now() }), []);
+  useEffect(() => {
+    if (!toast) return;
+    const t = window.setTimeout(() => setToast(null), 2600);
+    return () => window.clearTimeout(t);
+  }, [toast]);
+
+  // --- Trip state ---
+  const [destination, setDestination] = useState<Place | null>(null);
+  const [routes, setRoutes] = useState<Route[] | null>(null);
+  const [routeError, setRouteError] = useState<string | null>(null);
+  const [selected, setSelected] = useState(0);
+  const [activeRoute, setActiveRoute] = useState<Route | null>(null);
+  const [recenterKey, setRecenterKey] = useState(0);
+  const [muted, setMuted] = useState(false);
+  const [rerouting, setRerouting] = useState(false);
+  const [demoSpeedIdx, setDemoSpeedIdx] = useState(0);
+  const [searchForSaving, setSearchForSaving] = useState(false);
+  const [placeToSave, setPlaceToSave] = useState<Place | null>(null);
+
+  const realPos = geo.fix?.coord ?? null;
+  const origin = realPos ?? DEMO_START;
+
+  // Forget the trip once the user has backed out of it.
+  useEffect(() => {
+    if (!stack.includes('route') && !stack.includes('nav')) {
+      setDestination(null);
+      setRoutes(null);
+      setActiveRoute(null);
+      stopSpeaking();
+    }
+  }, [stack]);
+
+  const routeRequest = useRef<AbortController | null>(null);
+  const fetchRoutes = useCallback((from: LngLat, to: Place) => {
+    routeRequest.current?.abort();
+    const ctrl = new AbortController();
+    routeRequest.current = ctrl;
+    setRoutes(null);
+    setRouteError(null);
+    setSelected(0);
+    getRoutes(from, to.coord, ctrl.signal)
+      .then(setRoutes)
+      .catch((e: Error) => {
+        if (e.name === 'AbortError') return;
+        setRouteError(
+          e.message === 'No route found'
+            ? 'No driving route found to this place.'
+            : 'Couldn’t get directions. Check your internet and try again.',
+        );
+      });
+  }, []);
+
+  const openRoute = (place: Place) => {
+    addRecent(place);
+    setDestination(place);
+    fetchRoutes(origin, place);
+    go('route');
+  };
+
+  const pickFromSearch = (place: Place) => {
+    if (searchForSaving) {
+      setPlaceToSave(place);
+      go('save');
+    } else {
+      openRoute(place);
+    }
+  };
+
+  const startTrip = () => {
+    if (!routes || !destination) return;
+    const route = routes[selected];
+    spoken.current.clear();
+    setActiveRoute(route);
+    go('nav');
+    if (!muted) speak(`Jom! ${route.steps[0]?.instruction ?? 'Let’s go'}.`);
+  };
+
+  const endTrip = () => {
+    stopSpeaking();
+    backTo(0);
+  };
+
+  // --- Saved places ---
+  const savePlace = (label: string, kind: SavedKind) => {
+    if (!placeToSave) return;
+    const place = placeToSave;
+    setSaved((list) => [
+      ...list.filter((s) => s.label !== label && s.place.id !== place.id),
+      { label, kind, place },
+    ]);
+    showToast(`Saved as ${label}`);
+    if (searchForSaving) backTo(0);
+    else back();
+  };
+  const removeSaved = (label: string) => {
+    setSaved((list) => list.filter((s) => s.label !== label));
+    showToast(`Removed ${label}`);
+    back();
+  };
+  const savedAs = destination ? (saved.find((s) => s.place.id === destination.id)?.label ?? null) : null;
+
+  // --- Where the car is while navigating ---
+  const simulate = base === 'nav' && (FORCE_SIM || !realPos);
+  const sim = useSimulatedDrive(activeRoute, simulate, DEMO_SPEEDS[demoSpeedIdx]);
+
+  const lastPos = useRef<LngLat | null>(null);
+  const [courseHeading, setCourseHeading] = useState<number | null>(null);
+  useEffect(() => {
+    if (!realPos) return;
+    const prev = lastPos.current;
+    if (!prev) {
+      lastPos.current = realPos;
+    } else if (distance(prev, realPos) > 4) {
+      setCourseHeading(bearing(prev, realPos));
+      lastPos.current = realPos;
+    }
+  }, [realPos]);
+  const gpsHeading = geo.fix?.heading != null && (geo.fix.speed ?? 0) > 1 ? geo.fix.heading : courseHeading;
+
+  const navPos = simulate ? (sim?.coord ?? null) : realPos;
+  const navHeading = simulate ? (sim?.heading ?? null) : gpsHeading;
+  const progress = useNavProgress(base === 'nav' ? activeRoute : null, navPos);
+
+  // Voice: once ~400 m before a turn, once just before it.
+  const spoken = useRef(new Set<string>());
+  useEffect(() => {
+    if (base !== 'nav' || !progress || !activeRoute || muted) return;
+    if (progress.arrived) {
+      if (!spoken.current.has('arrived')) {
+        spoken.current.add('arrived');
+        speak('You have arrived. Dah sampai!');
+      }
+      return;
+    }
+    const step = activeRoute.steps[progress.stepIndex];
+    if (!step || progress.stepIndex === 0) return;
+    const far = `${progress.stepIndex}-far`;
+    const near = `${progress.stepIndex}-near`;
+    if (progress.toManeuver < 60 && !spoken.current.has(near)) {
+      spoken.current.add(near);
+      spoken.current.add(far);
+      speak(step.instruction);
+    } else if (progress.toManeuver < 400 && !spoken.current.has(far)) {
+      spoken.current.add(far);
+      speak(`In ${formatDistance(progress.toManeuver)}, ${lowerFirst(step.instruction)}`);
+    }
+  }, [base, progress, activeRoute, muted]);
+
+  // Off the route for a few fixes in a row: get a new one from here.
+  const offRouteCount = useRef(0);
+  const lastReroute = useRef(0);
+  useEffect(() => {
+    if (base !== 'nav' || simulate || !progress || !destination || !realPos || rerouting) return;
+    offRouteCount.current = progress.offRoute ? offRouteCount.current + 1 : 0;
+    if (offRouteCount.current < 3 || Date.now() - lastReroute.current < 10000) return;
+    offRouteCount.current = 0;
+    lastReroute.current = Date.now();
+    setRerouting(true);
+    getRoutes(realPos, destination.coord)
+      .then((list) => {
+        spoken.current.clear();
+        setActiveRoute(list[0]);
+        if (!muted) speak('Route updated.');
+      })
+      .catch(() => {
+        // Keep the old route; try again on the next fixes.
+      })
+      .finally(() => setRerouting(false));
+  }, [base, simulate, progress, destination, realPos, rerouting, muted]);
+
+  // Keep the screen on while driving.
+  useEffect(() => {
+    if (base !== 'nav' || !('wakeLock' in navigator)) return;
+    let lock: WakeLockSentinel | null = null;
+    navigator.wakeLock
+      .request('screen')
+      .then((l) => (lock = l))
+      .catch(() => {});
+    return () => {
+      lock?.release().catch(() => {});
+    };
+  }, [base]);
+
+  // --- Hazard reports (on this phone until family sharing exists) ---
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), 60000);
+    return () => window.clearInterval(id);
+  }, []);
+  const liveReports = useMemo(() => reports.filter((r) => now - r.at < REPORT_LIFETIME_MS), [reports, now]);
+  const reportPos = base === 'nav' ? navPos : realPos;
+  const sendReport = (type: HazardType, note: string) => {
+    if (!reportPos) return;
+    const report: HazardReport = { id: `${Date.now()}`, type, coord: reportPos, note, at: Date.now() };
+    setReports((list) => [...list.filter((r) => Date.now() - r.at < REPORT_LIFETIME_MS), report]);
+    const label = HAZARDS.find((h) => h.type === type)!.label;
+    showToast(`${label} reported`);
+    back();
+  };
+
+  const shareApp = async () => {
+    const url = window.location.origin;
+    const text = 'Jom guna OTW – aplikasi trip kita!';
+    try {
+      if (navigator.share) {
+        await navigator.share({ title: 'OTW', text, url });
+        return;
+      }
+      await navigator.clipboard.writeText(`${text} ${url}`);
+      showToast('Link copied – paste it in the family WhatsApp');
+    } catch {
+      // Share sheet closed: nothing to do.
+    }
+  };
+
+  // --- Leaving animations for full-screen pages ---
+  const leaveStyle = lastMove.current === 'pop' ? 'pop' : 'fade';
+  const searchView = usePresence(phase === 'app' && base === 'search');
+  const accountView = usePresence(phase === 'app' && base === 'account');
+  const familyView = usePresence(phase === 'app' && base === 'family');
+  const reportView = usePresence(phase === 'app' && top === 'report', 250);
+  const saveView = usePresence(phase === 'app' && top === 'save' && placeToSave != null, 250);
+
+  const mapMode: MapMode = base === 'nav' ? 'nav' : base === 'route' ? 'preview' : 'browse';
+
+  return (
+    <div className="app" data-screen={base}>
+      <MapView
+        theme={theme}
+        mode={mapMode}
+        position={base === 'nav' ? navPos : realPos}
+        heading={base === 'nav' ? navHeading : null}
+        routes={base === 'nav' ? (activeRoute ? [activeRoute] : null) : base === 'route' ? routes : null}
+        selectedRoute={base === 'nav' ? 0 : selected}
+        destination={destination?.coord ?? null}
+        reports={liveReports}
+        insets={INSETS[base] ?? NO_INSETS}
+        recenterKey={recenterKey}
+        onSelectRoute={setSelected}
+      />
+
+      {phase === 'app' && profile && (
+        <>
+          {base === 'home' && (
+            <HomeScreen
+              profile={profile}
+              position={realPos}
+              locationError={geo.error}
+              saved={saved}
+              recents={recents}
+              onSearch={() => {
+                setSearchForSaving(false);
+                go('search');
+              }}
+              onAccount={() => go('account')}
+              onPick={openRoute}
+              onAddSaved={() => {
+                setSearchForSaving(true);
+                go('search');
+              }}
+              onRecenter={() => setRecenterKey((k) => k + 1)}
+              onReport={() => go('report')}
+              onFamily={() => go('family')}
+            />
+          )}
+
+          {base === 'route' && destination && (
+            <RouteSheet
+              destination={destination}
+              originLabel={realPos ? 'your location' : 'KLCC (demo – location is off)'}
+              savedAs={savedAs}
+              routes={routes}
+              error={routeError}
+              selected={selected}
+              onSelect={setSelected}
+              onStart={startTrip}
+              onRetry={() => fetchRoutes(origin, destination)}
+              onSave={() => {
+                setSearchForSaving(false);
+                setPlaceToSave(destination);
+                go('save');
+              }}
+              onBack={back}
+            />
+          )}
+
+          {base === 'nav' && activeRoute && destination && (
+            <NavigationView
+              route={activeRoute}
+              progress={progress}
+              destination={destination}
+              muted={muted}
+              rerouting={rerouting}
+              demoSpeed={simulate ? DEMO_SPEEDS[demoSpeedIdx] : null}
+              onToggleMute={() => {
+                if (!muted) stopSpeaking();
+                setMuted((m) => !m);
+              }}
+              onDemoSpeed={() => setDemoSpeedIdx((i) => (i + 1) % DEMO_SPEEDS.length)}
+              onReport={() => go('report')}
+              onEnd={endTrip}
+            />
+          )}
+
+          {searchView.mounted && (
+            <SearchScreen
+              position={realPos}
+              recents={recents}
+              saved={saved}
+              forSaving={searchForSaving}
+              leaving={searchView.leaving ? leaveStyle : null}
+              onPick={pickFromSearch}
+              onBack={back}
+            />
+          )}
+
+          {accountView.mounted && (
+            <AccountScreen
+              profile={profile}
+              theme={theme}
+              leaving={accountView.leaving ? leaveStyle : null}
+              onSaveName={(name) => {
+                setProfile({ ...profile, name });
+                showToast(`Saved! Family sees you as ${name}`);
+              }}
+              onToggleTheme={toggleTheme}
+              onLogout={() => {
+                backTo(0);
+                setProfile(null);
+                setPhase('login');
+              }}
+              onBack={back}
+            />
+          )}
+
+          {familyView.mounted && (
+            <FamilyScreen
+              profile={profile}
+              hasLocation={realPos != null}
+              leaving={familyView.leaving ? leaveStyle : null}
+              onShareApp={shareApp}
+              onBack={back}
+            />
+          )}
+
+          {saveView.mounted && placeToSave && (
+            <SavePlaceSheet
+              key={placeToSave.id}
+              place={placeToSave}
+              saved={saved}
+              leaving={saveView.leaving}
+              onSave={savePlace}
+              onRemove={removeSaved}
+              onClose={back}
+            />
+          )}
+
+          {reportView.mounted && (
+            <ReportSheet
+              hasLocation={reportPos != null}
+              leaving={reportView.leaving}
+              onSend={sendReport}
+              onClose={back}
+            />
+          )}
+        </>
+      )}
+
+      {phase === 'login' && (
+        <LoginScreen
+          onDone={(p) => {
+            setProfile(p);
+            setPhase('app');
+          }}
+        />
+      )}
+
+      {phase === 'intro' && <IntroScreen onDone={finishIntro} />}
+
+      {toast && (
+        <div key={toast.id} className="toast" role="status">
+          <CheckIcon size={18} className="toast-icon" />
+          <span>{toast.text}</span>
+        </div>
+      )}
+    </div>
+  );
+}

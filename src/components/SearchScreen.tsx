@@ -1,0 +1,174 @@
+import { useEffect, useRef, useState } from 'react';
+import { CATEGORIES, searchPlaces, type Place } from '../lib/api';
+import { distance, formatDistance, type LngLat } from '../lib/geo';
+import type { SavedPlace } from '../lib/models';
+import { SavedIcon } from './brand';
+import { BackIcon, ClockIcon, PinIcon, SearchIcon } from './icons';
+
+interface Props {
+  position: LngLat | null;
+  recents: Place[];
+  saved: SavedPlace[];
+  /** Picking a place to save (from the "Add" chip) rather than to drive to. */
+  forSaving: boolean;
+  leaving: 'pop' | 'fade' | null;
+  onPick: (place: Place) => void;
+  onBack: () => void;
+}
+
+type Status = 'idle' | 'loading' | 'done' | 'error';
+type Category = (typeof CATEGORIES)[number];
+
+/** Search (design screen 2). */
+export default function SearchScreen({ position, recents, saved, forSaving, leaving, onPick, onBack }: Props) {
+  const [query, setQuery] = useState('');
+  const [category, setCategory] = useState<Category | null>(null);
+  const [results, setResults] = useState<Place[]>([]);
+  const [status, setStatus] = useState<Status>('idle');
+  const near = useRef(position);
+  near.current = position;
+
+  useEffect(() => {
+    const q = category ? category.query : query.trim();
+    if (q.length < 2) {
+      setResults([]);
+      setStatus('idle');
+      return;
+    }
+    const ctrl = new AbortController();
+    setStatus('loading');
+    const timer = window.setTimeout(
+      () => {
+        searchPlaces(q, near.current, ctrl.signal, category?.osmTag)
+          .then((list) => {
+            setResults(list);
+            setStatus('done');
+          })
+          .catch((e: unknown) => {
+            if ((e as Error).name !== 'AbortError') setStatus('error');
+          });
+      },
+      category ? 0 : 300,
+    );
+    return () => {
+      window.clearTimeout(timer);
+      ctrl.abort();
+    };
+  }, [query, category]);
+
+  const searching = category != null || query.trim().length >= 2;
+  const distanceTo = (place: Place) =>
+    position ? <span className="row-meta">{formatDistance(distance(position, place.coord))}</span> : null;
+
+  return (
+    <div className={`screen screen-push search-screen${leaving ? ` leave-${leaving}` : ''}`}>
+      <div className="search-head">
+        <button type="button" className="icon-btn" onClick={onBack} aria-label="Back to map">
+          <BackIcon />
+        </button>
+        <label className="search-field">
+          <SearchIcon size={18} className="muted" />
+          <input
+            type="search"
+            autoFocus
+            enterKeyHint="search"
+            placeholder={forSaving ? 'Search the place to save' : 'Search places or addresses'}
+            aria-label={forSaving ? 'Search the place to save' : 'Search places or addresses'}
+            value={query}
+            onChange={(e) => {
+              setCategory(null);
+              setQuery(e.target.value);
+            }}
+          />
+        </label>
+      </div>
+
+      <div className="chip-row search-chips">
+        {CATEGORIES.map((c) => (
+          <button
+            type="button"
+            key={c.label}
+            className={`filter-chip${category === c ? ' is-on' : ''}`}
+            aria-pressed={category === c}
+            onClick={() => {
+              setQuery('');
+              setCategory(category === c ? null : c);
+            }}
+          >
+            {c.label}
+          </button>
+        ))}
+      </div>
+
+      <div className="search-body">
+        {searching ? (
+          <>
+            <h2 className="section-label">{category ? `${category.label} near you` : 'Results'}</h2>
+            {status === 'loading' && results.length === 0 && <p className="hint">Searching…</p>}
+            {status === 'error' && (
+              <p className="hint">Search isn’t working right now. Check your internet and try again.</p>
+            )}
+            {status === 'done' && results.length === 0 && (
+              <p className="hint">Nothing found. Try a shorter name or add the town.</p>
+            )}
+            <div className="list" aria-live="polite">
+              {results.map((place) => (
+                <button type="button" key={place.id} className="row" onClick={() => onPick(place)}>
+                  <span className="row-icon tinted">
+                    <PinIcon size={20} />
+                  </span>
+                  <span className="row-text">
+                    <span className="row-title">{place.name}</span>
+                    {place.subtitle && <span className="row-sub">{place.subtitle}</span>}
+                  </span>
+                  {distanceTo(place)}
+                </button>
+              ))}
+            </div>
+          </>
+        ) : (
+          <>
+            {!forSaving && saved.length > 0 && (
+              <>
+                <h2 className="section-label">Saved places</h2>
+                <div className="list">
+                  {saved.map((s) => (
+                    <button type="button" key={s.label} className="row" onClick={() => onPick(s.place)}>
+                      <span className="row-icon tinted">
+                        <SavedIcon kind={s.kind} size={20} />
+                      </span>
+                      <span className="row-text">
+                        <span className="row-title">{s.label}</span>
+                        <span className="row-sub">{s.place.name}</span>
+                      </span>
+                      {distanceTo(s.place)}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+            <h2 className="section-label">Recent</h2>
+            {recents.length === 0 ? (
+              <p className="hint">Type a place, like “Mid Valley” or “Hospital Queen Elizabeth”.</p>
+            ) : (
+              <div className="list">
+                {recents.map((place) => (
+                  <button type="button" key={place.id} className="row" onClick={() => onPick(place)}>
+                    <span className="row-icon">
+                      <ClockIcon size={20} />
+                    </span>
+                    <span className="row-text">
+                      <span className="row-title">{place.name}</span>
+                      {place.subtitle && <span className="row-sub">{place.subtitle}</span>}
+                    </span>
+                    {distanceTo(place)}
+                  </button>
+                ))}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}

@@ -1,0 +1,15 @@
+{
+  "name": "OTW – Aplikasi trip anda",
+  "short_name": "OTW",
+  "description": "Navigation for the family.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0B5F52",
+  "theme_color": "#0B5F52",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/icon-maskable.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ]
+}
