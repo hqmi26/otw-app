@@ -1,7 +1,7 @@
 import type { Place } from '../lib/api';
 import { distance, formatDistance, type LngLat } from '../lib/geo';
 import { initials, type Profile, type SavedPlace } from '../lib/models';
-import { useSheetHeight } from '../hooks/useSheetHeight';
+import BottomSheet from './BottomSheet';
 import { SavedIcon } from './brand';
 import { AlertIcon, ClockIcon, LocateIcon, PlusIcon, SearchIcon } from './icons';
 
@@ -22,8 +22,7 @@ interface Props {
 
 /** Home map (design screen 1). */
 export default function HomeScreen(p: Props) {
-  const sheet = useSheetHeight<HTMLElement>();
-  const recents = p.recents.filter((r) => !p.saved.some((s) => s.place.id === r.id)).slice(0, 2);
+  const recents = p.recents.filter((r) => !p.saved.some((s) => s.place.id === r.id)).slice(0, 5);
 
   return (
     <>
@@ -68,17 +67,18 @@ export default function HomeScreen(p: Props) {
         </button>
       </div>
 
-      <section ref={sheet} className="sheet sheet-home" aria-labelledby="family-title">
-        <div className="handle" />
-        <div className="sheet-row-head">
-          <h2 id="family-title" className="sheet-title">
-            Family
-          </h2>
-          <button type="button" className="text-btn" onClick={p.onFamily}>
-            See all
-          </button>
-        </div>
-        <div className="list">
+      <BottomSheet
+        label="family panel"
+        header={
+          <div className="sheet-row-head">
+            <h2 className="sheet-title">Family</h2>
+            <button type="button" className="text-btn" onClick={p.onFamily}>
+              See all
+            </button>
+          </div>
+        }
+      >
+        <div className="list compact" data-peek>
           <button type="button" className="row" onClick={p.onFamily}>
             <span className="avatar">{initials(p.profile.name)}</span>
             <span className="row-text">
@@ -100,7 +100,7 @@ export default function HomeScreen(p: Props) {
         {recents.length > 0 && (
           <>
             <h2 className="section-label">Recent</h2>
-            <div className="list">
+            <div className="list compact">
               {recents.map((place) => (
                 <button type="button" key={place.id} className="row" onClick={() => p.onPick(place)}>
                   <span className="row-icon">
@@ -118,7 +118,7 @@ export default function HomeScreen(p: Props) {
             </div>
           </>
         )}
-      </section>
+      </BottomSheet>
     </>
   );
 }
