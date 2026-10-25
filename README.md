@@ -2,6 +2,8 @@
 
 Family navigation web app (phase 1). Works in the phone's browser and can be added to the home screen.
 
+**Live:** https://otw-app-eoz.pages.dev — hosted free on Cloudflare Pages. Every push to `main` rebuilds and updates it automatically.
+
 ## What works now
 
 Matches the design canvas ("OTW – Family Navigation App"):
@@ -31,16 +33,10 @@ Add `?sim` to the address to force the demo drive even when GPS works.
 
 ## Try it on a phone
 
-Phones only share GPS with sites served over **https**. The easiest way is to put
-the app online for free:
+Open https://otw-app-eoz.pages.dev on the phone and use **Add to Home Screen**
+(iPhone: Safari → Share → Add to Home Screen; Android: Chrome menu → Install app).
 
-```bash
-npm run build
-```
-
-Then upload the `dist` folder to Cloudflare Pages or Vercel (both free). Open the
-link on each phone and use **Add to Home Screen** (iPhone: Safari → Share → Add to
-Home Screen).
+Cloudflare Pages settings: build command `npm run build`, output folder `dist`.
 
 ## Free services used (no API keys)
 
