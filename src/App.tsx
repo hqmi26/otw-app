@@ -207,23 +207,34 @@ export default function App() {
   const simulate = base === 'nav' && (FORCE_SIM || !realPos);
   const sim = useSimulatedDrive(activeRoute, simulate, DEMO_SPEEDS[demoSpeedIdx]);
 
+  // Direction of travel from GPS. Ignores the few-metre wobble GPS has when
+  // standing still (indoors it can jump around and spin the map).
   const lastPos = useRef<LngLat | null>(null);
   const [courseHeading, setCourseHeading] = useState<number | null>(null);
+  const accuracy = geo.fix?.accuracy ?? Infinity;
   useEffect(() => {
-    if (!realPos) return;
+    if (!realPos || accuracy > 30) return;
     const prev = lastPos.current;
     if (!prev) {
       lastPos.current = realPos;
-    } else if (distance(prev, realPos) > 4) {
+    } else if (distance(prev, realPos) > 12) {
       setCourseHeading(bearing(prev, realPos));
       lastPos.current = realPos;
     }
-  }, [realPos]);
-  const gpsHeading = geo.fix?.heading != null && (geo.fix.speed ?? 0) > 1 ? geo.fix.heading : courseHeading;
+  }, [realPos, accuracy]);
+  const gpsHeading = geo.fix?.heading != null && (geo.fix.speed ?? 0) > 2 ? geo.fix.heading : courseHeading;
 
   const navPos = simulate ? (sim?.coord ?? null) : realPos;
-  const navHeading = simulate ? (sim?.heading ?? null) : gpsHeading;
   const progress = useNavProgress(base === 'nav' ? activeRoute : null, navPos);
+  // Near the route: draw the car on the road and point the map along it.
+  const shownNavPos = progress?.onRoad?.coord ?? navPos;
+  const navHeading = progress?.onRoad?.heading ?? (simulate ? (sim?.heading ?? null) : gpsHeading);
+
+  // The camera follows the car until the user drags the map to look around.
+  const [following, setFollowing] = useState(true);
+  useEffect(() => {
+    if (base === 'nav') setFollowing(true);
+  }, [base]);
 
   // Voice: once ~400 m before a turn, once just before it.
   const spoken = useRef(new Set<string>());
@@ -292,7 +303,7 @@ export default function App() {
     return () => window.clearInterval(id);
   }, []);
   const liveReports = useMemo(() => reports.filter((r) => now - r.at < REPORT_LIFETIME_MS), [reports, now]);
-  const reportPos = base === 'nav' ? navPos : realPos;
+  const reportPos = base === 'nav' ? shownNavPos : realPos;
   const sendReport = (type: HazardType, note: string) => {
     if (!reportPos) return;
     const report: HazardReport = { id: `${Date.now()}`, type, coord: reportPos, note, at: Date.now() };
@@ -332,7 +343,7 @@ export default function App() {
       <MapView
         theme={theme}
         mode={mapMode}
-        position={base === 'nav' ? navPos : realPos}
+        position={base === 'nav' ? shownNavPos : realPos}
         heading={base === 'nav' ? navHeading : null}
         routes={base === 'nav' ? (activeRoute ? [activeRoute] : null) : base === 'route' ? routes : null}
         selectedRoute={base === 'nav' ? 0 : selected}
@@ -340,7 +351,11 @@ export default function App() {
         reports={liveReports}
         insets={INSETS[base] ?? NO_INSETS}
         recenterKey={recenterKey}
+        follow={following}
         onSelectRoute={setSelected}
+        onUserMove={() => {
+          if (base === 'nav') setFollowing(false);
+        }}
       />
 
       {phase === 'app' && profile && (
@@ -396,6 +411,8 @@ export default function App() {
               muted={muted}
               rerouting={rerouting}
               demoSpeed={simulate ? DEMO_SPEEDS[demoSpeedIdx] : null}
+              following={following}
+              onRecenter={() => setFollowing(true)}
               onToggleMute={() => {
                 if (!muted) stopSpeaking();
                 setMuted((m) => !m);

@@ -46,7 +46,11 @@ interface Props {
   insets: { top: number; bottom: number };
   /** Bump to fly back to the user. */
   recenterKey: number;
+  /** While navigating: keep the camera on the car. Off after the user drags the map. */
+  follow: boolean;
   onSelectRoute: (index: number) => void;
+  /** The user dragged, zoomed or turned the map with their fingers. */
+  onUserMove: () => void;
 }
 
 function routeData(routes: Route[] | null, selected: number, mode: MapMode): FeatureCollection {
@@ -167,6 +171,14 @@ export default function MapView(props: Props) {
     map.on('mouseleave', LINE_LAYER, () => {
       map.getCanvas().style.cursor = '';
     });
+    // Only finger/mouse gestures carry an originalEvent; our own camera moves don't.
+    const onGesture = (e: { originalEvent?: Event }) => {
+      if (e.originalEvent) latest.current.onUserMove();
+    };
+    map.on('dragstart', onGesture);
+    map.on('zoomstart', onGesture);
+    map.on('rotatestart', onGesture);
+    map.on('pitchstart', onGesture);
     mapRef.current = map;
     return () => {
       map.remove();
@@ -268,10 +280,10 @@ export default function MapView(props: Props) {
     });
   }, [props.mode, props.routes, props.insets.top, props.insets.bottom]);
 
-  // Camera while driving: follow and turn with the car.
+  // Camera while driving: follow and turn with the car, unless the user is looking around.
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || props.mode !== 'nav' || !props.position) return;
+    if (!map || props.mode !== 'nav' || !props.position || !props.follow) return;
     map.easeTo({
       center: props.position,
       zoom: 17,
@@ -281,7 +293,7 @@ export default function MapView(props: Props) {
       duration: 900,
       easing: (t) => t,
     });
-  }, [props.mode, props.position, props.heading, props.insets.top, props.insets.bottom]);
+  }, [props.mode, props.position, props.heading, props.follow, props.insets.top, props.insets.bottom]);
 
   // Back on the main map after a trip: flatten it and return to the user (or KL).
   const prevMode = useRef(props.mode);

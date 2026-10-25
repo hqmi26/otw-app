@@ -739,6 +739,25 @@ input:focus-visible {
   padding-top: 18px;
 }
 
+.recenter-btn {
+  position: absolute;
+  left: 16px;
+  bottom: calc(var(--sheet-h) + 16px);
+  z-index: 2;
+  height: 48px;
+  padding: 0 18px 0 14px;
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--accent-text);
+  box-shadow: var(--shadow);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  font-weight: 700;
+  animation: fade-in 0.2s ease-out both;
+}
+
 .nav-summary {
   display: flex;
   align-items: center;

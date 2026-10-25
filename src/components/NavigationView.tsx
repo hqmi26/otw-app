@@ -3,7 +3,7 @@ import { formatClock, formatDistance, formatDuration } from '../lib/geo';
 import { arrowRotation } from '../lib/instructions';
 import type { Progress } from '../hooks/useNavigation';
 import { useSheetHeight } from '../hooks/useSheetHeight';
-import { AlertIcon, FlagIcon, MutedIcon, RoundaboutIcon, SoundIcon, TurnArrowIcon } from './icons';
+import { AlertIcon, FlagIcon, MutedIcon, NavArrowIcon, RoundaboutIcon, SoundIcon, TurnArrowIcon } from './icons';
 
 interface Props {
   route: Route;
@@ -13,6 +13,9 @@ interface Props {
   rerouting: boolean;
   /** Set when the car is simulated (no GPS); shows the speed control. */
   demoSpeed: number | null;
+  /** False after the user drags the map; shows the Re-centre button. */
+  following: boolean;
+  onRecenter: () => void;
   onToggleMute: () => void;
   onDemoSpeed: () => void;
   onReport: () => void;
@@ -72,6 +75,13 @@ export default function NavigationView(p: Props) {
           <AlertIcon />
         </button>
       </div>
+
+      {!p.following && (
+        <button type="button" className="recenter-btn" onClick={p.onRecenter}>
+          <NavArrowIcon size={18} />
+          Re-centre
+        </button>
+      )}
 
       <section ref={sheet} className="sheet sheet-nav" aria-label="Trip">
         <div className="nav-summary">

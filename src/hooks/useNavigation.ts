@@ -13,9 +13,16 @@ export interface Progress {
   remainingTime: number;
   offRoute: boolean;
   arrived: boolean;
+  /**
+   * The car's spot on the route and the road's direction there, when GPS puts
+   * it close enough to trust. Lets the arrow sit on the road and keeps the map
+   * steady while GPS wobbles (e.g. standing still indoors).
+   */
+  onRoad: { coord: LngLat; heading: number } | null;
 }
 
 const OFF_ROUTE_M = 45;
+const SNAP_M = 30;
 const ARRIVED_M = 25;
 
 /** Where the driver is on the route and what comes next. */
@@ -40,6 +47,7 @@ export function useNavProgress(route: Route | null, position: LngLat | null): Pr
       remainingTime: route.duration * (remaining / Math.max(1, prepared.total)),
       offRoute: snap.offset > OFF_ROUTE_M,
       arrived: remaining < ARRIVED_M,
+      onRoad: snap.offset <= SNAP_M ? pointAlong(route.coords, prepared.cum, snap.along) : null,
     };
   }, [route, prepared, position]);
 }
