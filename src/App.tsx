@@ -29,6 +29,7 @@ import { useRecents } from './hooks/useRecents';
 import { useStored } from './hooks/useStored';
 import { usePresence } from './hooks/usePresence';
 import { useNavProgress, useSimulatedDrive } from './hooks/useNavigation';
+import { requestCompassPermission, useCompass } from './hooks/useCompass';
 
 type Screen = 'home' | 'search' | 'route' | 'nav' | 'family' | 'account' | 'report' | 'save';
 /** Screens that open as a sheet over whatever is underneath. */
@@ -172,6 +173,7 @@ export default function App() {
 
   const startTrip = () => {
     if (!routes || !destination) return;
+    void requestCompassPermission(); // iPhone only asks inside a tap
     const route = routes[selected];
     spoken.current.clear();
     setActiveRoute(route);
@@ -210,6 +212,7 @@ export default function App() {
   // Direction of travel from GPS. Ignores the few-metre wobble GPS has when
   // standing still (indoors it can jump around and spin the map).
   const lastPos = useRef<LngLat | null>(null);
+  const lastMovedAt = useRef(0);
   const [courseHeading, setCourseHeading] = useState<number | null>(null);
   const accuracy = geo.fix?.accuracy ?? Infinity;
   useEffect(() => {
@@ -220,15 +223,24 @@ export default function App() {
     } else if (distance(prev, realPos) > 12) {
       setCourseHeading(bearing(prev, realPos));
       lastPos.current = realPos;
+      lastMovedAt.current = Date.now();
     }
   }, [realPos, accuracy]);
   const gpsHeading = geo.fix?.heading != null && (geo.fix.speed ?? 0) > 2 ? geo.fix.heading : courseHeading;
+  // Driving speed (≈9 km/h+), or GPS has seen us travel in the last few seconds.
+  const driving = simulate || (geo.fix?.speed ?? 0) > 2.5 || Date.now() - lastMovedAt.current < 5000;
+
+  // The phone's compass, for when we're standing still: turn the phone and the
+  // arrow and map turn with it. While driving it's ignored (compasses are
+  // unreliable inside a car), and the road/GPS direction is used instead.
+  const compass = useCompass(phase === 'app' && !simulate);
 
   const navPos = simulate ? (sim?.coord ?? null) : realPos;
   const progress = useNavProgress(base === 'nav' ? activeRoute : null, navPos);
   // Near the route: draw the car on the road and point the map along it.
   const shownNavPos = progress?.onRoad?.coord ?? navPos;
-  const navHeading = progress?.onRoad?.heading ?? (simulate ? (sim?.heading ?? null) : gpsHeading);
+  const travelHeading = progress?.onRoad?.heading ?? (simulate ? (sim?.heading ?? null) : gpsHeading);
+  const navHeading = driving ? travelHeading : (compass ?? travelHeading);
 
   // The camera follows the car until the user drags the map to look around.
   const [following, setFollowing] = useState(true);
@@ -344,7 +356,7 @@ export default function App() {
         theme={theme}
         mode={mapMode}
         position={base === 'nav' ? shownNavPos : realPos}
-        heading={base === 'nav' ? navHeading : null}
+        heading={base === 'nav' ? navHeading : compass}
         routes={base === 'nav' ? (activeRoute ? [activeRoute] : null) : base === 'route' ? routes : null}
         selectedRoute={base === 'nav' ? 0 : selected}
         destination={destination?.coord ?? null}
@@ -377,7 +389,10 @@ export default function App() {
                 setSearchForSaving(true);
                 go('search');
               }}
-              onRecenter={() => setRecenterKey((k) => k + 1)}
+              onRecenter={() => {
+                void requestCompassPermission();
+                setRecenterKey((k) => k + 1);
+              }}
               onReport={() => go('report')}
               onFamily={() => go('family')}
             />

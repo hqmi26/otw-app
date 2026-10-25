@@ -118,16 +118,31 @@ input:focus-visible {
 /* ---------- Map markers ---------- */
 .user-marker {
   position: relative;
-  width: 44px;
-  height: 44px;
+  width: 96px;
+  height: 96px;
   display: flex;
   align-items: center;
   justify-content: center;
+  pointer-events: none;
+}
+
+/* Beam pointing where the phone faces (shown when the compass works). */
+.user-beam {
+  position: absolute;
+  inset: 0;
+  display: none;
+  background: radial-gradient(circle at 50% 50%, var(--user) 0%, transparent 68%);
+  opacity: 0.45;
+  clip-path: polygon(50% 50%, 24% 0%, 76% 0%);
+}
+
+.user-marker.has-heading .user-beam {
+  display: block;
 }
 
 .user-halo {
   position: absolute;
-  inset: 4px;
+  inset: 26px;
   border-radius: 999px;
   background: var(--user);
   opacity: 0.18;
@@ -135,31 +150,48 @@ input:focus-visible {
 }
 
 .user-dot {
-  width: 18px;
-  height: 18px;
+  position: relative;
+  width: 22px;
+  height: 22px;
   border-radius: 999px;
   background: var(--user);
-  border: 3px solid #fff;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+  border: 3.5px solid #fff;
+  box-shadow: 0 1px 5px rgba(0, 0, 0, 0.4);
 }
 
-.user-arrow {
+/* While navigating: a big arrow on a white disc, easy to spot at a glance. */
+.user-puck {
+  position: relative;
   display: none;
-  width: 30px;
-  height: 30px;
-  fill: var(--user);
-  stroke: #fff;
-  stroke-width: 1.6;
-  filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.35));
+  width: 58px;
+  height: 58px;
+  border-radius: 999px;
+  background: #fff;
+  box-shadow: 0 0 0 6px color-mix(in srgb, var(--user) 30%, transparent), 0 4px 14px rgba(0, 0, 0, 0.45);
+  align-items: center;
+  justify-content: center;
+}
+
+.user-puck svg {
+  width: 34px;
+  height: 34px;
+  fill: #0e7c6b;
+  stroke: #0b5f52;
+  stroke-width: 0.8;
+  stroke-linejoin: round;
 }
 
 .user-marker.is-nav .user-dot,
-.user-marker.is-nav .user-halo {
+.user-marker.is-nav .user-beam {
   display: none;
 }
 
-.user-marker.is-nav .user-arrow {
-  display: block;
+.user-marker.is-nav .user-halo {
+  inset: 12px;
+}
+
+.user-marker.is-nav .user-puck {
+  display: flex;
 }
 
 .dest-marker svg {

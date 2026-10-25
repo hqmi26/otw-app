@@ -104,12 +104,18 @@ function addRouteLayers(map: MapLibreMap, theme: Theme) {
   );
 }
 
+/**
+ * "You are here". On the map: a dot with a beam showing which way the phone
+ * points. While navigating: a big arrow puck that stays upright on screen.
+ */
 function makeUserMarker(): HTMLElement {
   const el = document.createElement('div');
   el.className = 'user-marker';
+  el.setAttribute('role', 'img');
+  el.setAttribute('aria-label', 'Your location');
   el.innerHTML =
-    '<span class="user-halo"></span><span class="user-dot"></span>' +
-    '<svg class="user-arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2l7 19-7-4-7 4z"/></svg>';
+    '<span class="user-beam"></span><span class="user-halo"></span><span class="user-dot"></span>' +
+    '<span class="user-puck"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5l7.6 18.4-7.6-4.3-7.6 4.3z"/></svg></span>';
   return el;
 }
 
@@ -216,15 +222,18 @@ export default function MapView(props: Props) {
       userMarker.current = new Marker({
         element: makeUserMarker(),
         rotationAlignment: 'map',
-        pitchAlignment: 'map',
+        // Stays upright facing the viewer even when the map is tilted in 3D.
+        pitchAlignment: 'viewport',
       })
         .setLngLat(props.position)
         .addTo(map);
     }
     const marker = userMarker.current;
     marker.setLngLat(props.position);
-    marker.getElement().classList.toggle('is-nav', props.mode === 'nav');
-    marker.setRotation(props.mode === 'nav' ? props.heading ?? 0 : 0);
+    const el = marker.getElement();
+    el.classList.toggle('is-nav', props.mode === 'nav');
+    el.classList.toggle('has-heading', props.heading != null);
+    marker.setRotation(props.heading ?? 0);
 
     if (!centredOnUser.current && props.mode === 'browse') {
       centredOnUser.current = true;
@@ -290,7 +299,8 @@ export default function MapView(props: Props) {
       pitch: 55,
       bearing: props.heading ?? map.getBearing(),
       padding: { top: props.insets.top, bottom: props.insets.bottom, left: 0, right: 0 },
-      duration: 900,
+      // Short enough that turning the phone (compass) feels immediate.
+      duration: 500,
       easing: (t) => t,
     });
   }, [props.mode, props.position, props.heading, props.follow, props.insets.top, props.insets.bottom]);
