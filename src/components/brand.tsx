@@ -1,17 +1,28 @@
 import type { SavedKind, HazardType } from '../lib/models';
+import { arrowRotation } from '../lib/instructions';
 import {
   AlertIcon,
   CarIcon,
+  FlagIcon,
   FloodIcon,
   HomeIcon,
   PinIcon,
   PotholeIcon,
   RoadblockIcon,
+  RoundaboutIcon,
   SchoolIcon,
   StarIcon,
   TrafficIcon,
+  TurnArrowIcon,
   WorkIcon,
 } from './icons';
+
+/** Arrow for a turn: rotated for left/right, a flag on arrival, a ring for roundabouts. */
+export function ManeuverIcon({ type, modifier, size = 44 }: { type: string; modifier?: string; size?: number }) {
+  if (type === 'arrive') return <FlagIcon size={size} />;
+  if (type === 'roundabout' || type === 'rotary') return <RoundaboutIcon size={size} />;
+  return <TurnArrowIcon size={size} style={{ transform: `rotate(${arrowRotation(modifier)}deg)` }} />;
+}
 
 /** The OTW mark: a ring with an arrow, the "O" of the logo. */
 export function OtwMark({ size = 64, color = 'currentColor' }: { size?: number; color?: string }) {

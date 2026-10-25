@@ -9,8 +9,10 @@ export interface Progress {
   toManeuver: number;
   /** Metres left to the destination. */
   remaining: number;
-  /** Seconds left, scaled from the route's estimate. */
+  /** Seconds left, scaled from the route's estimate (no traffic). */
   remainingTime: number;
+  /** Metres of the route already driven. */
+  covered: number;
   offRoute: boolean;
   arrived: boolean;
   /**
@@ -45,6 +47,7 @@ export function useNavProgress(route: Route | null, position: LngLat | null): Pr
       toManeuver: Math.max(0, prepared.stepAlong[next] - snap.along),
       remaining,
       remainingTime: route.duration * (remaining / Math.max(1, prepared.total)),
+      covered: snap.along,
       offRoute: snap.offset > OFF_ROUTE_M,
       arrived: remaining < ARRIVED_M,
       onRoad: snap.offset <= SNAP_M ? pointAlong(route.coords, prepared.cum, snap.along) : null,

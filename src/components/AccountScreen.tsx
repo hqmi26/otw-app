@@ -1,14 +1,18 @@
 import { useState } from 'react';
 import { initials, type Profile } from '../lib/models';
+import type { Lang } from '../lib/instructions';
 import type { Theme } from '../hooks/useTheme';
-import { BackIcon, MoonIcon } from './icons';
+import { BackIcon, MoonIcon, SoundIcon } from './icons';
 
 interface Props {
   profile: Profile;
   theme: Theme;
+  lang: Lang;
   leaving: 'pop' | 'fade' | null;
   onSaveName: (name: string) => void;
   onToggleTheme: () => void;
+  onLang: (lang: Lang) => void;
+  onTestVoice: (lang: Lang) => void;
   onLogout: () => void;
   onBack: () => void;
 }
@@ -93,15 +97,51 @@ export default function AccountScreen(p: Props) {
           </button>
         </div>
 
+        <h2 className="section-label">Voice directions</h2>
+        <div className="card stack">
+          <div className="setting-row">
+            <span className="row-icon tinted">
+              <SoundIcon size={20} />
+            </span>
+            <span className="row-text">
+              <span id="acc-lang" className="row-title">
+                Language
+              </span>
+              <span className="row-sub wrap">Turn instructions on screen and spoken</span>
+            </span>
+          </div>
+          <div className="segmented" role="radiogroup" aria-labelledby="acc-lang">
+            {(
+              [
+                ['en', 'English'],
+                ['ms', 'Bahasa Melayu'],
+              ] as const
+            ).map(([value, label]) => (
+              <button
+                type="button"
+                key={value}
+                role="radio"
+                aria-checked={p.lang === value}
+                className={`segment${p.lang === value ? ' is-on' : ''}`}
+                onClick={() => {
+                  p.onLang(value);
+                  p.onTestVoice(value);
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <button type="button" className="text-btn" onClick={() => p.onTestVoice(p.lang)}>
+            {p.lang === 'ms' ? 'Dengar contoh' : 'Play a sample'} ›
+          </button>
+        </div>
+
         <h2 className="section-label">About</h2>
         <div className="card">
           <div className="info-row">
-            <span>Bahasa</span>
-            <span className="muted">BM + English</span>
-          </div>
-          <div className="info-row">
             <span>Version</span>
-            <span className="muted">0.2 · family test</span>
+            <span className="muted">0.3 · family test</span>
           </div>
         </div>
 

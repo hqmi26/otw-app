@@ -1,14 +1,18 @@
 import type { Place, Route } from '../lib/api';
 import { formatClock, formatDistance, formatDuration } from '../lib/geo';
-import { arrowRotation } from '../lib/instructions';
+import { instruction, thenText, type Lang } from '../lib/instructions';
 import type { Progress } from '../hooks/useNavigation';
 import { useSheetHeight } from '../hooks/useSheetHeight';
-import { AlertIcon, FlagIcon, MutedIcon, NavArrowIcon, RoundaboutIcon, SoundIcon, TurnArrowIcon } from './icons';
+import { ManeuverIcon } from './brand';
+import { AlertIcon, MutedIcon, NavArrowIcon, SoundIcon } from './icons';
 
 interface Props {
   route: Route;
   progress: Progress | null;
+  /** Seconds left, already adjusted for rush hour and the real pace. */
+  remainingTime: number | null;
   destination: Place;
+  lang: Lang;
   muted: boolean;
   rerouting: boolean;
   /** Set when the car is simulated (no GPS); shows the speed control. */
@@ -18,39 +22,40 @@ interface Props {
   onRecenter: () => void;
   onToggleMute: () => void;
   onDemoSpeed: () => void;
+  onShowSteps: () => void;
   onReport: () => void;
   onEnd: () => void;
 }
-
-function ManeuverIcon({ type, modifier }: { type: string; modifier?: string }) {
-  if (type === 'arrive') return <FlagIcon size={44} />;
-  if (type === 'roundabout' || type === 'rotary') return <RoundaboutIcon size={44} />;
-  return <TurnArrowIcon size={44} style={{ transform: `rotate(${arrowRotation(modifier)}deg)` }} />;
-}
-
-const lowerFirst = (s: string) => s.charAt(0).toLowerCase() + s.slice(1);
 
 export default function NavigationView(p: Props) {
   const sheet = useSheetHeight<HTMLElement>();
   const step = p.progress ? p.route.steps[p.progress.stepIndex] : p.route.steps[0];
   const then = p.progress ? p.route.steps[p.progress.stepIndex + 1] : undefined;
-  const remainingTime = p.progress?.remainingTime ?? p.route.duration;
+  const remainingTime = p.remainingTime ?? p.route.duration;
   const remaining = p.progress?.remaining ?? p.route.distance;
 
   return (
     <>
-      <div className="nav-card" role="status" aria-live="polite">
-        <div className="nav-main">
+      <button
+        type="button"
+        className="nav-card"
+        onClick={p.onShowSteps}
+        aria-label={`${instruction(step, p.lang)}. Show all turns`}
+      >
+        <span className="nav-main">
           <ManeuverIcon type={step.type} modifier={step.modifier} />
-          <div className="nav-text">
+          <span className="nav-text" role="status" aria-live="polite">
             {p.progress && step.type !== 'arrive' && (
               <span className="nav-dist">{formatDistance(p.progress.toManeuver)}</span>
             )}
-            <span className="nav-instruction">{step.instruction}</span>
-          </div>
-        </div>
-        {then && then.type !== 'arrive' && <div className="nav-then">Then {lowerFirst(then.instruction)}</div>}
-      </div>
+            <span className="nav-instruction">{instruction(step, p.lang)}</span>
+          </span>
+        </span>
+        <span className="nav-then">
+          <span>{then && then.type !== 'arrive' ? thenText(then, p.lang) : ' '}</span>
+          <span className="nav-steps-hint">{p.lang === 'ms' ? 'Semua belokan' : 'All turns'} ›</span>
+        </span>
+      </button>
 
       <div className="chips">
         {p.rerouting && <span className="chip">Finding a new route…</span>}

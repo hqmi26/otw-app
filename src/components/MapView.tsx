@@ -51,7 +51,13 @@ interface Props {
   onSelectRoute: (index: number) => void;
   /** The user dragged, zoomed or turned the map with their fingers. */
   onUserMove: () => void;
+  /** Press and hold (or right-click) on the browse map. */
+  onLongPress: (coord: LngLat) => void;
 }
+
+const LONG_PRESS_MS = 550;
+/** A finger that wanders further than this is panning, not holding. */
+const LONG_PRESS_SLOP_PX = 10;
 
 function routeData(routes: Route[] | null, selected: number, mode: MapMode): FeatureCollection {
   const list = routes ?? [];
@@ -185,6 +191,41 @@ export default function MapView(props: Props) {
     map.on('zoomstart', onGesture);
     map.on('rotatestart', onGesture);
     map.on('pitchstart', onGesture);
+
+    // Press and hold drops a pin. iPhones never send contextmenu for a held
+    // finger, so time the touch ourselves; Android sends both, so the second
+    // one inside a short window is ignored.
+    let press: { timer: number; x: number; y: number } | null = null;
+    let lastLongPress = 0;
+    const cancelPress = () => {
+      if (press) window.clearTimeout(press.timer);
+      press = null;
+    };
+    const longPress = (at: { lng: number; lat: number }) => {
+      cancelPress();
+      const now = Date.now();
+      if (latest.current.mode !== 'browse' || now - lastLongPress < 1000) return;
+      lastLongPress = now;
+      latest.current.onLongPress([at.lng, at.lat]);
+    };
+    map.on('touchstart', (e) => {
+      cancelPress();
+      if (e.originalEvent.touches.length !== 1 || latest.current.mode !== 'browse') return;
+      const at = e.lngLat;
+      press = { x: e.point.x, y: e.point.y, timer: window.setTimeout(() => longPress(at), LONG_PRESS_MS) };
+    });
+    map.on('touchmove', (e) => {
+      if (!press) return;
+      const moved = Math.hypot(e.point.x - press.x, e.point.y - press.y);
+      if (e.originalEvent.touches.length !== 1 || moved > LONG_PRESS_SLOP_PX) cancelPress();
+    });
+    map.on('touchend', cancelPress);
+    map.on('touchcancel', cancelPress);
+    map.on('dragstart', cancelPress);
+    map.on('contextmenu', (e) => {
+      e.originalEvent.preventDefault();
+      longPress(e.lngLat);
+    });
     mapRef.current = map;
     return () => {
       map.remove();

@@ -27,6 +27,25 @@ export default function SearchScreen({ position, recents, saved, forSaving, leav
   const [status, setStatus] = useState<Status>('idle');
   const near = useRef(position);
   near.current = position;
+  const input = useRef<HTMLInputElement>(null);
+
+  // Let the slide-in finish before the keyboard opens; doing both at once
+  // makes the phone resize the page mid-animation and the screen stutters.
+  useEffect(() => {
+    const t = window.setTimeout(() => input.current?.focus({ preventScroll: true }), 320);
+    return () => window.clearTimeout(t);
+  }, []);
+
+  // Phone back gesture: close the keyboard as the page starts leaving.
+  useEffect(() => {
+    if (leaving) input.current?.blur();
+  }, [leaving]);
+
+  // Drop the keyboard first so it closes while the page slides away.
+  const back = () => {
+    input.current?.blur();
+    onBack();
+  };
 
   useEffect(() => {
     const q = category ? category.query : query.trim();
@@ -63,14 +82,14 @@ export default function SearchScreen({ position, recents, saved, forSaving, leav
   return (
     <div className={`screen screen-push search-screen${leaving ? ` leave-${leaving}` : ''}`}>
       <div className="search-head">
-        <button type="button" className="icon-btn" onClick={onBack} aria-label="Back to map">
+        <button type="button" className="icon-btn" onClick={back} aria-label="Back to map">
           <BackIcon />
         </button>
         <label className="search-field">
           <SearchIcon size={18} className="muted" />
           <input
+            ref={input}
             type="search"
-            autoFocus
             enterKeyHint="search"
             placeholder={forSaving ? 'Search the place to save' : 'Search places or addresses'}
             aria-label={forSaving ? 'Search the place to save' : 'Search places or addresses'}

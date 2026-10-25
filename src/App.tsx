@@ -10,9 +10,12 @@ import AccountScreen from './components/AccountScreen';
 import FamilyScreen from './components/FamilyScreen';
 import ReportSheet from './components/ReportSheet';
 import SavePlaceSheet from './components/SavePlaceSheet';
+import StepsSheet from './components/StepsSheet';
 import { CheckIcon } from './components/icons';
-import { getRoutes, type Place, type Route } from './lib/api';
-import { bearing, distance, formatDistance, type LngLat } from './lib/geo';
+import { getRoutes, reverseGeocode, type Place, type Route } from './lib/api';
+import { bearing, distance, type LngLat } from './lib/geo';
+import { aheadPhrase, instruction, PHRASES, type Lang } from './lib/instructions';
+import { rushHourFactor } from './lib/eta';
 import {
   HAZARDS,
   REPORT_LIFETIME_MS,
@@ -31,9 +34,11 @@ import { usePresence } from './hooks/usePresence';
 import { useNavProgress, useSimulatedDrive } from './hooks/useNavigation';
 import { requestCompassPermission, useCompass } from './hooks/useCompass';
 
-type Screen = 'home' | 'search' | 'route' | 'nav' | 'family' | 'account' | 'report' | 'save';
+type Screen = 'home' | 'search' | 'route' | 'nav' | 'family' | 'account' | 'report' | 'save' | 'steps';
 /** Screens that open as a sheet over whatever is underneath. */
-const MODALS: Screen[] = ['report', 'save'];
+const MODALS: Screen[] = ['report', 'save', 'steps'];
+/** Full-screen pages opened from home; home stays mounted underneath them. */
+const HOME_OVERLAYS: Screen[] = ['search', 'account', 'family', 'report', 'save'];
 
 /** Where trips start when the browser has no GPS, e.g. testing on a laptop. */
 const DEMO_START: LngLat = [101.7119, 3.1579]; // KLCC
@@ -49,7 +54,6 @@ const INSETS: Partial<Record<Screen, { top: number; bottom: number }>> = {
 };
 const NO_INSETS = { top: 0, bottom: 0 };
 
-const lowerFirst = (s: string) => s.charAt(0).toLowerCase() + s.slice(1);
 const isArray = (v: unknown) => Array.isArray(v);
 
 export default function App() {
@@ -59,6 +63,8 @@ export default function App() {
   const [profile, setProfile] = useStored<Profile | null>('otw-profile', null, (v) => v == null || typeof v === 'object');
   const [saved, setSaved] = useStored<SavedPlace[]>('otw-saved', [], isArray);
   const [reports, setReports] = useStored<HazardReport[]>('otw-reports', [], isArray);
+  /** Language for turn instructions and voice (Account → Voice directions). */
+  const [lang, setLang] = useStored<Lang>('otw-voice-lang', 'en', (v) => v === 'en' || v === 'ms');
 
   // --- Opening: logo intro, then login the first time. ---
   const [phase, setPhase] = useState<'intro' | 'login' | 'app'>('intro');
@@ -155,11 +161,35 @@ export default function App() {
       });
   }, []);
 
-  const openRoute = (place: Place) => {
-    addRecent(place);
+  const openRoute = (place: Place, remember = true) => {
+    if (remember) addRecent(place);
     setDestination(place);
     fetchRoutes(origin, place);
     go('route');
+  };
+
+  // Long-press on the map: drop a pin there and show directions to it.
+  const dropPin = (coord: LngLat) => {
+    if (base !== 'home') return;
+    navigator.vibrate?.(25);
+    const pin: Place = {
+      id: `pin:${coord[1].toFixed(5)},${coord[0].toFixed(5)}`,
+      name: 'Dropped pin',
+      subtitle: `${coord[1].toFixed(5)}, ${coord[0].toFixed(5)}`,
+      coord,
+    };
+    openRoute(pin, false);
+    // Then find out what's there and name the pin after it.
+    reverseGeocode(coord)
+      .then((found) => {
+        if (!found) return;
+        const named = { ...pin, name: found.name, subtitle: found.subtitle };
+        addRecent(named);
+        setDestination((d) => (d?.id === pin.id ? named : d));
+      })
+      .catch(() => {
+        // Offline or no result: it stays "Dropped pin" with its coordinates.
+      });
   };
 
   const pickFromSearch = (place: Place) => {
@@ -176,9 +206,14 @@ export default function App() {
     void requestCompassPermission(); // iPhone only asks inside a tap
     const route = routes[selected];
     spoken.current.clear();
+    pace.current = null;
+    tripRush.current = rushHourFactor(new Date());
     setActiveRoute(route);
     go('nav');
-    if (!muted) speak(`Jom! ${route.steps[0]?.instruction ?? 'Let’s go'}.`);
+    if (!muted) {
+      const first = route.steps[0] ? ` ${instruction(route.steps[0], lang)}.` : '';
+      speak(`${PHRASES.start[lang]}${first}`, lang);
+    }
   };
 
   const endTrip = () => {
@@ -255,7 +290,7 @@ export default function App() {
     if (progress.arrived) {
       if (!spoken.current.has('arrived')) {
         spoken.current.add('arrived');
-        speak('You have arrived. Dah sampai!');
+        speak(PHRASES.arrived[lang], lang);
       }
       return;
     }
@@ -266,12 +301,36 @@ export default function App() {
     if (progress.toManeuver < 60 && !spoken.current.has(near)) {
       spoken.current.add(near);
       spoken.current.add(far);
-      speak(step.instruction);
+      speak(instruction(step, lang), lang);
     } else if (progress.toManeuver < 400 && !spoken.current.has(far)) {
       spoken.current.add(far);
-      speak(`In ${formatDistance(progress.toManeuver)}, ${lowerFirst(step.instruction)}`);
+      speak(aheadPhrase(progress.toManeuver, step, lang), lang);
     }
-  }, [base, progress, activeRoute, muted]);
+  }, [base, progress, activeRoute, muted, lang]);
+
+  // --- ETA ---
+  // The free routing service doesn't know about traffic, so we adjust its
+  // estimate twice: for the usual Malaysian rush hours when the trip starts,
+  // and then by how fast the trip is actually going compared with the plan.
+  const tripRush = useRef(1);
+  const pace = useRef<{ t: number; covered: number } | null>(null);
+  const remainingTime = (() => {
+    if (!progress || !activeRoute) return null;
+    const planned = progress.remainingTime * tripRush.current;
+    if (simulate) return planned;
+    if (!pace.current) {
+      pace.current = { t: Date.now(), covered: progress.covered };
+      return planned;
+    }
+    const drivenM = progress.covered - pace.current.covered;
+    const elapsedS = (Date.now() - pace.current.t) / 1000;
+    const expectedS = (activeRoute.duration * tripRush.current * drivenM) / Math.max(1, activeRoute.distance);
+    // Trust the real pace only once there's enough of it (≥400 m and a minute), and more as the trip goes on.
+    if (drivenM < 400 || elapsedS < 60 || expectedS <= 0) return planned;
+    const ratio = Math.min(3, Math.max(0.6, elapsedS / expectedS));
+    const weight = Math.min(1, drivenM / 3000);
+    return planned * (1 + (ratio - 1) * weight);
+  })();
 
   // Off the route for a few fixes in a row: get a new one from here.
   const offRouteCount = useRef(0);
@@ -286,14 +345,15 @@ export default function App() {
     getRoutes(realPos, destination.coord)
       .then((list) => {
         spoken.current.clear();
+        pace.current = null;
         setActiveRoute(list[0]);
-        if (!muted) speak('Route updated.');
+        if (!muted) speak(PHRASES.rerouted[lang], lang);
       })
       .catch(() => {
         // Keep the old route; try again on the next fixes.
       })
       .finally(() => setRerouting(false));
-  }, [base, simulate, progress, destination, realPos, rerouting, muted]);
+  }, [base, simulate, progress, destination, realPos, rerouting, muted, lang]);
 
   // Keep the screen on while driving.
   useEffect(() => {
@@ -347,8 +407,13 @@ export default function App() {
   const familyView = usePresence(phase === 'app' && base === 'family');
   const reportView = usePresence(phase === 'app' && top === 'report', 250);
   const saveView = usePresence(phase === 'app' && top === 'save' && placeToSave != null, 250);
+  const stepsRoute = base === 'nav' ? activeRoute : (routes?.[selected] ?? null);
+  const stepsView = usePresence(phase === 'app' && top === 'steps' && stepsRoute != null, 250);
 
   const mapMode: MapMode = base === 'nav' ? 'nav' : base === 'route' ? 'preview' : 'browse';
+  // Keep the home screen alive under full-screen pages opened from it, so going
+  // back is instant instead of rebuilding (and re-animating) the whole screen.
+  const homeAlive = base === 'home' || (HOME_OVERLAYS.includes(base) && !stack.includes('route') && !stack.includes('nav'));
 
   return (
     <div className="app" data-screen={base}>
@@ -368,11 +433,13 @@ export default function App() {
         onUserMove={() => {
           if (base === 'nav') setFollowing(false);
         }}
+        onLongPress={dropPin}
       />
 
       {phase === 'app' && profile && (
         <>
-          {base === 'home' && (
+          {homeAlive && (
+            <div className="home-layer" inert={base !== 'home'}>
             <HomeScreen
               profile={profile}
               position={realPos}
@@ -396,6 +463,7 @@ export default function App() {
               onReport={() => go('report')}
               onFamily={() => go('family')}
             />
+            </div>
           )}
 
           {base === 'route' && destination && (
@@ -406,7 +474,9 @@ export default function App() {
               routes={routes}
               error={routeError}
               selected={selected}
+              rush={rushHourFactor(new Date())}
               onSelect={setSelected}
+              onShowSteps={() => go('steps')}
               onStart={startTrip}
               onRetry={() => fetchRoutes(origin, destination)}
               onSave={() => {
@@ -422,7 +492,9 @@ export default function App() {
             <NavigationView
               route={activeRoute}
               progress={progress}
+              remainingTime={remainingTime}
               destination={destination}
+              lang={lang}
               muted={muted}
               rerouting={rerouting}
               demoSpeed={simulate ? DEMO_SPEEDS[demoSpeedIdx] : null}
@@ -433,6 +505,7 @@ export default function App() {
                 setMuted((m) => !m);
               }}
               onDemoSpeed={() => setDemoSpeedIdx((i) => (i + 1) % DEMO_SPEEDS.length)}
+              onShowSteps={() => go('steps')}
               onReport={() => go('report')}
               onEnd={endTrip}
             />
@@ -460,6 +533,9 @@ export default function App() {
                 showToast(`Saved! Family sees you as ${name}`);
               }}
               onToggleTheme={toggleTheme}
+              lang={lang}
+              onLang={setLang}
+              onTestVoice={(l) => speak(PHRASES.test[l], l)}
               onLogout={() => {
                 backTo(0);
                 setProfile(null);
@@ -487,6 +563,16 @@ export default function App() {
               leaving={saveView.leaving}
               onSave={savePlace}
               onRemove={removeSaved}
+              onClose={back}
+            />
+          )}
+
+          {stepsView.mounted && stepsRoute && (
+            <StepsSheet
+              route={stepsRoute}
+              lang={lang}
+              currentStep={base === 'nav' ? (progress?.stepIndex ?? null) : null}
+              leaving={stepsView.leaving}
               onClose={back}
             />
           )}

@@ -1,5 +1,4 @@
 import type { LngLat } from './geo';
-import { describeStep } from './instructions';
 
 /*
  * Free public services, no API keys:
@@ -61,31 +60,46 @@ export async function searchPlaces(
   const seen = new Set<string>();
   const places: Place[] = [];
   for (const f of data.features) {
-    const p = f.properties;
-    const street = [p.housenumber, p.street].filter(Boolean).join(' ');
-    const name = p.name || street;
-    if (!name) continue;
-    const subtitle = [p.name ? street : '', p.district || p.city || p.county, p.state]
-      .filter(Boolean)
-      .join(', ');
-    const key = `${name}|${subtitle}`;
+    const place = toPlace(f, places.length);
+    if (!place) continue;
+    const key = `${place.name}|${place.subtitle}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    places.push({
-      id: `${p.osm_type ?? 'X'}${p.osm_id ?? places.length}`,
-      name,
-      subtitle,
-      coord: f.geometry.coordinates,
-    });
+    places.push(place);
   }
   return places;
 }
 
+function toPlace(f: PhotonFeature, fallbackId: number): Place | null {
+  const p = f.properties;
+  const street = [p.housenumber, p.street].filter(Boolean).join(' ');
+  const name = p.name || street;
+  if (!name) return null;
+  const subtitle = [p.name ? street : '', p.district || p.city || p.county, p.state].filter(Boolean).join(', ');
+  return { id: `${p.osm_type ?? 'X'}${p.osm_id ?? fallbackId}`, name, subtitle, coord: f.geometry.coordinates };
+}
+
+/** What's at a spot on the map (for long-press pins): nearest named place or street. */
+export async function reverseGeocode(coord: LngLat, signal?: AbortSignal): Promise<{ name: string; subtitle: string } | null> {
+  const params = new URLSearchParams({ lon: coord[0].toFixed(6), lat: coord[1].toFixed(6), limit: '1' });
+  const res = await fetch(`${PHOTON_URL.replace('/api/', '/reverse')}?${params}`, { signal });
+  if (!res.ok) return null;
+  const data = (await res.json()) as { features: PhotonFeature[] };
+  const place = data.features[0] ? toPlace(data.features[0], 0) : null;
+  return place ? { name: place.name, subtitle: place.subtitle } : null;
+}
+
+/** One manoeuvre. Text is made from these at display time, in the chosen language. */
 export interface RouteStep {
-  instruction: string;
   type: string;
   modifier?: string;
+  /** Roundabout exit number. */
+  exit?: number;
+  /** Road name or number after the manoeuvre ('' if unnamed). */
+  road: string;
   location: LngLat;
+  /** Metres from this manoeuvre to the next one. */
+  distance: number;
 }
 
 export interface Route {
@@ -102,6 +116,7 @@ export interface Route {
 interface OsrmStep {
   name: string;
   ref?: string;
+  distance: number;
   maneuver: { type: string; modifier?: string; location: LngLat; exit?: number };
 }
 
@@ -128,10 +143,12 @@ export async function getRoutes(from: LngLat, to: LngLat, signal?: AbortSignal):
     via: r.legs[0]?.summary ?? '',
     steps: r.legs.flatMap((leg) =>
       leg.steps.map((s) => ({
-        instruction: describeStep(s),
         type: s.maneuver.type,
         modifier: s.maneuver.modifier,
+        exit: s.maneuver.exit,
+        road: s.name || s.ref || '',
         location: s.maneuver.location,
+        distance: s.distance,
       })),
     ),
   }));

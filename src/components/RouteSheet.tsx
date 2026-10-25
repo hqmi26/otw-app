@@ -11,10 +11,13 @@ interface Props {
   routes: Route[] | null;
   error: string | null;
   selected: number;
+  /** Rush-hour slow-down for leaving now (1 = normal traffic). */
+  rush: number;
   onSelect: (index: number) => void;
   onStart: () => void;
   onRetry: () => void;
   onSave: () => void;
+  onShowSteps: () => void;
   onBack: () => void;
 }
 
@@ -76,7 +79,7 @@ export default function RouteSheet(p: Props) {
               >
                 <span className="row-text">
                   <span className="route-time">
-                    {formatDuration(r.duration)}
+                    {formatDuration(r.duration * p.rush)}
                     {i === fastest && p.routes!.length > 1 && <span className="badge">Fastest</span>}
                   </span>
                   <span className="row-sub">
@@ -84,9 +87,20 @@ export default function RouteSheet(p: Props) {
                     {r.via ? ` · via ${r.via}` : ''}
                   </span>
                 </span>
-                <span className="row-meta">arrive {formatClock(new Date(Date.now() + r.duration * 1000))}</span>
+                <span className="row-meta">
+                  arrive {formatClock(new Date(Date.now() + r.duration * p.rush * 1000))}
+                </span>
               </button>
             ))}
+          </div>
+        )}
+
+        {p.routes && (
+          <div className="route-extras">
+            <span className="row-sub wrap">{p.rush > 1 ? 'Includes usual rush-hour traffic' : ' '}</span>
+            <button type="button" className="text-btn" onClick={p.onShowSteps}>
+              All turns ›
+            </button>
           </div>
         )}
 
