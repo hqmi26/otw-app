@@ -15,12 +15,18 @@ interface Props {
 
 /** Every turn on the route, in order, with the distance until the next one. */
 export default function StepsSheet({ route, lang, currentStep, leaving, onClose }: Props) {
+  const list = useRef<HTMLOListElement>(null);
   const current = useRef<HTMLLIElement>(null);
   const ms = lang === 'ms';
 
-  // Open with the upcoming turn in view.
+  // Open with the upcoming turn in view. Scroll only the list: scrollIntoView
+  // would also shift the whole screen while the sheet is still sliding up.
   useEffect(() => {
-    current.current?.scrollIntoView({ block: 'center' });
+    const box = list.current;
+    const row = current.current;
+    if (!box || !row) return;
+    const offset = row.getBoundingClientRect().top - box.getBoundingClientRect().top;
+    box.scrollTop += offset - (box.clientHeight - row.offsetHeight) / 2;
   }, []);
 
   return (
@@ -43,7 +49,7 @@ export default function StepsSheet({ route, lang, currentStep, leaving, onClose 
           </button>
         </div>
 
-        <ol className="steps-list">
+        <ol ref={list} className="steps-list">
           {route.steps.map((step, i) => {
             const state = currentStep == null ? '' : i < currentStep ? ' is-done' : i === currentStep ? ' is-next' : '';
             return (

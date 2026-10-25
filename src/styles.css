@@ -108,6 +108,8 @@ input:focus-visible {
   position: fixed;
   inset: 0;
   overflow: hidden;
+  /* Not even scripts or focus can scroll the app frame (clip, unlike hidden, forbids it). */
+  overflow: clip;
 }
 
 .map {
