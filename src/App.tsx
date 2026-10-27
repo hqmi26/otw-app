@@ -11,6 +11,7 @@ import FamilyScreen from './components/FamilyScreen';
 import ReportSheet from './components/ReportSheet';
 import SavePlaceSheet from './components/SavePlaceSheet';
 import StepsSheet from './components/StepsSheet';
+import FeedbackSheet from './components/FeedbackSheet';
 import { CheckIcon } from './components/icons';
 import { getRoutes, reverseGeocode, type Place, type Route } from './lib/api';
 import { bearing, distance, type LngLat } from './lib/geo';
@@ -34,11 +35,11 @@ import { usePresence } from './hooks/usePresence';
 import { useNavProgress, useSimulatedDrive } from './hooks/useNavigation';
 import { requestCompassPermission, useCompass } from './hooks/useCompass';
 
-type Screen = 'home' | 'search' | 'route' | 'nav' | 'family' | 'account' | 'report' | 'save' | 'steps';
+type Screen = 'home' | 'search' | 'route' | 'nav' | 'family' | 'account' | 'report' | 'save' | 'steps' | 'feedback';
 /** Screens that open as a sheet over whatever is underneath. */
-const MODALS: Screen[] = ['report', 'save', 'steps'];
+const MODALS: Screen[] = ['report', 'save', 'steps', 'feedback'];
 /** Full-screen pages opened from home; home stays mounted underneath them. */
-const HOME_OVERLAYS: Screen[] = ['search', 'account', 'family', 'report', 'save'];
+const HOME_OVERLAYS: Screen[] = ['search', 'account', 'family', 'report', 'save', 'feedback'];
 
 /** Where trips start when the browser has no GPS, e.g. testing on a laptop. */
 const DEMO_START: LngLat = [101.7119, 3.1579]; // KLCC
@@ -409,6 +410,7 @@ export default function App() {
   const saveView = usePresence(phase === 'app' && top === 'save' && placeToSave != null, 250);
   const stepsRoute = base === 'nav' ? activeRoute : (routes?.[selected] ?? null);
   const stepsView = usePresence(phase === 'app' && top === 'steps' && stepsRoute != null, 250);
+  const feedbackView = usePresence(phase === 'app' && top === 'feedback', 250);
 
   const mapMode: MapMode = base === 'nav' ? 'nav' : base === 'route' ? 'preview' : 'browse';
   // Keep the home screen alive under full-screen pages opened from it, so going
@@ -462,6 +464,7 @@ export default function App() {
               }}
               onReport={() => go('report')}
               onFamily={() => go('family')}
+              onFeedback={() => go('feedback')}
             />
             </div>
           )}
@@ -536,6 +539,7 @@ export default function App() {
               lang={lang}
               onLang={setLang}
               onTestVoice={(l) => speak(PHRASES.test[l], l)}
+              onFeedback={() => go('feedback')}
               onLogout={() => {
                 backTo(0);
                 setProfile(null);
@@ -585,6 +589,8 @@ export default function App() {
               onClose={back}
             />
           )}
+
+          {feedbackView.mounted && <FeedbackSheet name={profile.name} leaving={feedbackView.leaving} onClose={back} />}
         </>
       )}
 

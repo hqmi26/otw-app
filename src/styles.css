@@ -95,7 +95,8 @@ button:active:not(:disabled) {
 }
 
 button:focus-visible,
-input:focus-visible {
+input:focus-visible,
+textarea:focus-visible {
   outline: 3px solid var(--accent);
   outline-offset: 2px;
 }
@@ -1113,6 +1114,15 @@ input:focus-visible {
   color: var(--text);
 }
 
+textarea.input {
+  display: block;
+  height: auto;
+  min-height: 132px;
+  padding: 12px 14px;
+  line-height: 1.45;
+  resize: none;
+}
+
 .phone-field {
   display: flex;
   align-items: center;
@@ -1267,6 +1277,10 @@ input:focus-visible {
   background: var(--line);
 }
 
+.segmented.three {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .segment {
   height: 44px;
   border-radius: 10px;
@@ -1330,6 +1344,11 @@ input:focus-visible {
   font-size: 13px;
   line-height: 1.4;
   color: var(--text2);
+}
+
+.privacy-note.is-error {
+  background: var(--warn-bg);
+  color: var(--warn-text);
 }
 
 .page .privacy-note {

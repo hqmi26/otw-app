@@ -8,6 +8,7 @@
     "dev": "vite --host",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host",
+    "preview:cloudflare": "vite build && npx --yes wrangler@4.149.0 pages dev dist --d1 DB=otw-feedback --port 8788 --compatibility-date=2026-10-06",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

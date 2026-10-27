@@ -1,8 +1,8 @@
 import { useState } from 'react';
-import { initials, type Profile } from '../lib/models';
+import { APP_VERSION, initials, type Profile } from '../lib/models';
 import type { Lang } from '../lib/instructions';
 import type { Theme } from '../hooks/useTheme';
-import { BackIcon, MoonIcon, SoundIcon } from './icons';
+import { BackIcon, ChatIcon, MoonIcon, SoundIcon } from './icons';
 
 interface Props {
   profile: Profile;
@@ -13,6 +13,7 @@ interface Props {
   onToggleTheme: () => void;
   onLang: (lang: Lang) => void;
   onTestVoice: (lang: Lang) => void;
+  onFeedback: () => void;
   onLogout: () => void;
   onBack: () => void;
 }
@@ -137,11 +138,24 @@ export default function AccountScreen(p: Props) {
           </button>
         </div>
 
+        <h2 className="section-label">Help make OTW better</h2>
+        <div className="card list">
+          <button type="button" className="row" onClick={p.onFeedback}>
+            <span className="row-icon tinted">
+              <ChatIcon size={20} />
+            </span>
+            <span className="row-text">
+              <span className="row-title">Send feedback</span>
+              <span className="row-sub">Ideas, bugs, anything</span>
+            </span>
+          </button>
+        </div>
+
         <h2 className="section-label">About</h2>
         <div className="card">
           <div className="info-row">
             <span>Version</span>
-            <span className="muted">0.3 · family test</span>
+            <span className="muted">{APP_VERSION}</span>
           </div>
         </div>
 

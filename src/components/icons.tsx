@@ -208,6 +208,13 @@ export const CheckIcon = (p: IconProps) => (
   </Stroke>
 );
 
+export const ChatIcon = (p: IconProps) => (
+  <Stroke {...p}>
+    <path d="M20 15a2 2 0 0 1-2 2H8l-4 4V5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2z" />
+    <path d="M8 8.5h8M8 12h5" />
+  </Stroke>
+);
+
 export const FlagIcon = (p: IconProps) => (
   <Stroke strokeWidth={2.4} {...p}>
     <path d="M5 21V4" />
