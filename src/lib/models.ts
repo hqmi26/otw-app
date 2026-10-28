@@ -1,6 +1,9 @@
 import type { Place } from './api';
 import type { LngLat } from './geo';
 
+/** Shown in Account → About and added to feedback emails. */
+export const APP_VERSION = '0.3 · family test';
+
 export interface Profile {
   name: string;
   /** Digits after +60, as typed. */

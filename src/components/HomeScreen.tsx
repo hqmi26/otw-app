@@ -3,7 +3,7 @@ import { distance, formatDistance, type LngLat } from '../lib/geo';
 import { initials, type Profile, type SavedPlace } from '../lib/models';
 import BottomSheet from './BottomSheet';
 import { SavedIcon } from './brand';
-import { AlertIcon, ClockIcon, LocateIcon, PlusIcon, SearchIcon } from './icons';
+import { AlertIcon, ChatIcon, ClockIcon, LocateIcon, PlusIcon, SearchIcon } from './icons';
 
 interface Props {
   profile: Profile;
@@ -18,6 +18,7 @@ interface Props {
   onRecenter: () => void;
   onReport: () => void;
   onFamily: () => void;
+  onFeedback: () => void;
 }
 
 /** Home map (design screen 1). */
@@ -118,6 +119,19 @@ export default function HomeScreen(p: Props) {
             </div>
           </>
         )}
+
+        <h2 className="section-label">OTW is new</h2>
+        <div className="list compact">
+          <button type="button" className="row" onClick={p.onFeedback}>
+            <span className="row-icon tinted">
+              <ChatIcon size={20} />
+            </span>
+            <span className="row-text">
+              <span className="row-title">Send feedback</span>
+              <span className="row-sub">Tell us what to fix or add next</span>
+            </span>
+          </button>
+        </div>
       </BottomSheet>
     </>
   );

@@ -18,6 +18,7 @@ Matches the design canvas ("OTW – Family Navigation App"):
 - Report a hazard (pinned on the map for 2 hours, on this phone only for now)
 - Account: change username, dark mode switch, log out
 - Family page (sharing arrives with accounts) with a "Share OTW" button
+- Send feedback (home panel or Account): ideas and bug reports are saved for you to review
 - Phone back button / swipe goes back a screen
 
 ## Run it on your computer
@@ -38,6 +39,32 @@ Open https://otw-app-eoz.pages.dev on the phone and use **Add to Home Screen**
 
 Cloudflare Pages settings: build command `npm run build`, output folder `dist`.
 
+## Feedback
+
+"Send feedback" posts to `functions/api/feedback.ts`, which Cloudflare Pages runs
+next to the app and which saves each message in a free Cloudflare D1 database.
+The `feedback` table is created by itself on the first message.
+
+**One-time setup** in the Cloudflare dashboard:
+
+1. **Storage & databases → D1 → Create database**, name it `otw-feedback`.
+2. **Workers & Pages → otw-app → Settings → Bindings → Add → D1 database**:
+   variable name `DB`, database `otw-feedback`. Save.
+3. Push to `main` (or **Retry deployment**) so the new binding is picked up.
+
+**Reading feedback:** D1 → `otw-feedback` → **Console**, then run
+
+```sql
+SELECT id, created_at, kind, message, name, app FROM feedback ORDER BY id DESC;
+```
+
+Times are UTC (Malaysia is +8). Each row also has the phone model (`device`) and
+screen size, for reproducing bugs. No location is sent.
+
+**On your computer:** `npm run dev` has no server behind it, so sending feedback
+shows "Couldn't send". To try the whole thing, run `npm run preview:cloudflare` and
+open http://localhost:8788. It uses a local test database in `.wrangler/`.
+
 ## Free services used (no API keys)
 
 | What | Service | Note |
@@ -45,6 +72,7 @@ Cloudflare Pages settings: build command `npm run build`, output folder `dist`.
 | Map tiles | OpenFreeMap (OpenStreetMap data) | Free, no limits |
 | Search | Photon public server | Fair use only |
 | Routing | OSRM demo server | Demo use only |
+| Feedback | Cloudflare Pages Functions + D1 | Free tier, plenty for feedback |
 
 For a public launch, run Photon and OSRM on our own server in Malaysia so
 nobody's location leaves the country.
@@ -57,6 +85,7 @@ nobody's location leaves the country.
 - `src/lib/api.ts` – search and routing calls
 - `src/lib/geo.ts` – distance maths and formatting
 - `src/hooks/useNavigation.ts` – progress along the route and the demo drive
+- `functions/api/feedback.ts` – saves feedback (runs on Cloudflare, not in the phone)
 
 ## Next
 
