@@ -11,7 +11,12 @@ interface FindArgs {
   near: LngLat | null;
   mine: MyPlace[];
   signal: AbortSignal;
+  /** Gets the Sabah results straight away, while other states are still being asked. */
+  onFirst?: (places: Place[]) => void;
 }
+
+/** Sabah results further than this come after places in other states ("Mid Valley" is in KL, not Tawau). */
+const FAR = 50_000;
 
 function abortIfStale(signal: AbortSignal) {
   if (signal.aborted) throw new DOMException('Search replaced by a newer one', 'AbortError');
@@ -31,8 +36,8 @@ function searchMine({ query, category, near, mine }: FindArgs): Hit[] {
 
 /**
  * Search for the search screen. Sabah is searched on the phone from our own
- * list (Overture + OpenStreetMap); elsewhere, or if nothing in Sabah matches,
- * it asks the Photon server. Places the user added come first.
+ * list (Overture + OpenStreetMap) and shown at once; the Photon server is
+ * asked too, for the rest of Malaysia. Places the user added come first.
  */
 export async function findPlaces(args: FindArgs): Promise<Place[]> {
   const { query, category, near, signal } = args;
@@ -41,18 +46,33 @@ export async function findPlaces(args: FindArgs): Promise<Place[]> {
   abortIfStale(signal);
 
   const local = ix != null && (near == null || covers(ix, near));
-  if (local) {
-    const hits = category ? nearbyInGroup(ix, category.group, near) : searchIndex(ix, query, near);
-    if (hits.length > 0 || mine.length > 0) return dedupe([...mine, ...hits]).map((h) => h.place).slice(0, 10);
-  }
+  const first = local
+    ? dedupe([...mine, ...(category ? nearbyInGroup(ix, category.group, near) : searchIndex(ix, query, near))])
+        .map((h) => h.place)
+        .slice(0, 10)
+    : [];
+  // The chips want what's closest, and the Sabah list has that.
+  if (category && first.length > 0) return first;
+  if (first.length > 0) args.onFirst?.(first);
+
+  let remote: Place[];
   try {
-    const remote = await searchPlaces(category ? category.query : query, near, signal, category?.osmTag);
-    return [...mine.map((h) => h.place), ...remote];
+    remote = await searchPlaces(category ? category.query : query, near, signal, category?.osmTag);
   } catch (e) {
-    // Offline but the Sabah list was searched: "nothing found" is the honest answer.
-    if (local && (e as Error).name !== 'AbortError') return mine.map((h) => h.place);
+    // Offline but the Sabah list was searched: its results are the honest answer.
+    if (local && (e as Error).name !== 'AbortError') return first;
     throw e;
   }
+  if (first.length === 0) return [...mine.map((h) => h.place), ...remote];
+
+  // Close-by Sabah places, then other states, then far-away Sabah places,
+  // then anything Photon has in Sabah that the list doesn't.
+  const names = new Set(first.map((p) => p.name.toLowerCase()));
+  const inSabah = (p: Place) => covers(ix!, p.coord);
+  const close = first.filter((p) => near == null || distance(near, p.coord) <= FAR);
+  const far = first.filter((p) => !close.includes(p));
+  const extra = remote.filter((p) => inSabah(p) && !names.has(p.name.toLowerCase()));
+  return [...close, ...remote.filter((p) => !inSabah(p)), ...far, ...extra].slice(0, 10);
 }
 
 /** Name for a dropped pin: the user's own place, then the Sabah list, then Photon. */

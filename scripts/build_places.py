@@ -5,7 +5,8 @@ draws on the map in Sabah.
 
 Sources (all allow commercial use; the credit is shown on the map):
   - Overture Maps places: shops, food, suraus, offices... (Meta, Microsoft and others)
-  - Overture streets, neighbourhoods and named land use (these come from OpenStreetMap)
+  - Overture streets, neighbourhoods, named land use, peaks, islands, beaches and
+    named buildings (these come from OpenStreetMap)
   - OpenStreetMap places via Overpass, which fills some of Overture's gaps
 
 GitHub Actions runs this once a month (.github/workflows/places.yml). By hand:
@@ -33,6 +34,8 @@ BUCKET = "overturemaps-us-west-2"
 WEST, SOUTH, EAST, NORTH = 115.10, 3.95, 119.35, 7.45
 # Overture's own 0-1 score. Below this, places are often closed, duplicated or junk.
 MIN_CONFIDENCE = 0.3
+# Sabah has several thousand named places in OpenStreetMap; far fewer means a broken download.
+MIN_OSM = 3000
 OVERPASS = [
     "https://overpass-api.de/api/interpreter",
     "https://overpass.private.coffee/api/interpreter",
@@ -58,7 +61,20 @@ GROUPS = [
 LABELS = {
     "muslim_place_of_worship": "Surau / masjid", "mosque": "Surau / masjid", "gas_station": "Petrol station",
     "fuel": "Petrol station", "fast_food": "Fast food", "food_court": "Food court", "cafe": "Café",
+    "peak": "Mountain", "volcano": "Mountain", "islet": "Island", "archipelago": "Islands", "cave_entrance": "Cave",
 }
+# Named nature from the map itself: peaks, islands, beaches. These are where the place really is.
+NATURE = ("peak", "volcano", "hill", "ridge", "mountain_range", "valley", "cliff", "cave_entrance",
+          "island", "islet", "archipelago", "beach", "reef")
+REPEATED_AREA = re.compile(r"(taman|tmn|kampung|kampong|kg|kpg|desa|bandar|perumahan|jalan|lorong)\b")
+GENERIC_BUILDING = {"store", "stor", "laboratory", "lab", "classes", "classroom", "hostel", "chapel", "dewan",
+                    "canteen", "kantin", "surau", "jetty", "rectory", "toilet", "tandas", "garage", "office",
+                    "warehouse", "gudang", "building", "block", "blok", "rumah", "house", "kedai", "shop", "hall"}
+# One-of-a-kind places. Meta has copies of them wherever someone made a page or checked in
+# ("Mount Kinabalu" in Putatan, "Tanjung Aru Beach" in Sepanggar), so far-away copies are dropped.
+LANDMARK = {"beach", "mountain", "island", "national_park", "hiking_trail", "historic_site", "monument",
+            "landmark_and_historical_building", "waterfall", "lake", "river", "tourist_attraction", "airport",
+            "nature_reserve"}
 
 
 def norm(text: str) -> str:
@@ -159,9 +175,20 @@ def overture(release: str):
           SELECT names, subtype, class, ST_Centroid(geometry) AS c, geometry FROM {src('base/type=land_use')}
           WHERE {box} AND names.primary IS NOT NULL)
         WHERE {inside}""").fetchall()
+    nature = con.sql(f"""
+        SELECT names.primary, names.common['en'], class, ST_X(p), ST_Y(p) FROM (
+          SELECT names, class, ST_PointOnSurface(geometry) AS p, geometry FROM {src('base/type=land')}
+          WHERE {box} AND names.primary IS NOT NULL AND class IN {NATURE})
+        WHERE {inside}""").fetchall()
+    # Condos, churches, halls and school blocks that only have a name on the building.
+    buildings = con.sql(f"""
+        SELECT names.primary, coalesce(class, subtype, ''), ST_X(c), ST_Y(c) FROM (
+          SELECT names, class, subtype, ST_Centroid(geometry) AS c, geometry FROM {src('buildings/type=building')}
+          WHERE {box} AND names.primary IS NOT NULL)
+        WHERE {inside}""").fetchall()
     # A rough outline (about 1 km accuracy) so the app knows where this file's places apply.
     border = json.loads(con.sql("SELECT ST_AsGeoJSON(ST_SimplifyPreserveTopology(g, 0.01)) FROM sabah").fetchall()[0][0])
-    return places, streets, divisions, land, border
+    return places, streets, divisions, land, nature, buildings, border
 
 
 def osm_places():
@@ -190,7 +217,11 @@ out center tags;"""
             try:
                 req = urllib.request.Request(url, data=body, headers={"User-Agent": "otw-app places build"})
                 with urllib.request.urlopen(req, timeout=360) as r:
-                    return json.load(r)["elements"]
+                    data = json.load(r)
+                # A busy server can answer "OK" with a timeout note and no places at all.
+                if len(data.get("elements", [])) < MIN_OSM:
+                    raise ValueError(data.get("remark") or "too few places")
+                return data["elements"]
             except Exception as e:  # busy server: try the next one
                 print(f"  OpenStreetMap: {url.split('/')[2]} failed ({type(e).__name__}), trying another")
         time.sleep(30 * (attempt + 1))
@@ -214,9 +245,10 @@ def main():
     release = latest_release()
     print(f"Overture release {release}")
     t = time.time()
-    ov_places, ov_streets, ov_divisions, ov_land, border = overture(release)
-    print(f"  Overture: {len(ov_places)} places, {len(ov_streets)} road pieces, "
-          f"{len(ov_divisions)} areas, {len(ov_land)} named land use ({time.time() - t:.0f}s)")
+    ov_places, ov_streets, ov_divisions, ov_land, ov_nature, ov_buildings, border = overture(release)
+    print(f"  Overture: {len(ov_places)} places, {len(ov_streets)} road pieces, {len(ov_divisions)} areas, "
+          f"{len(ov_land)} named land use, {len(ov_nature)} peaks/islands/beaches, "
+          f"{len(ov_buildings)} named buildings ({time.time() - t:.0f}s)")
     t = time.time()
     osm = osm_places()
     print(f"  OpenStreetMap: {len(osm)} places ({time.time() - t:.0f}s)")
@@ -246,6 +278,35 @@ def main():
             area_rows.append((name, x, y, "Housing area"))
         else:
             other_land.append((name, cls or subtype, x, y))
+    # Where each peak, island and area really is, by name (English names too: "Mount Kinabalu").
+    real_spot, area_spot = {}, {}
+    for name, en, cls, x, y in ov_nature:
+        area_rows.append((name, x, y, label(cls)))
+        for n in {norm(name), norm(en or "")} - {""}:
+            real_spot.setdefault(n, []).append((x, y))
+    for name, x, y, kind in area_rows:
+        # Every town has its own "Taman Sutera" and "Kampung Pantai", so those names aren't one place.
+        if len(norm(name).split()) >= 2 and not REPEATED_AREA.match(norm(name)):
+            # Towns and islands spread further than a taman: KKIA is 6 km from Kota Kinabalu's
+            # centre, and Pulau Banggi is 30 km long.
+            big = kind in ("Town", "Island", "Islands")
+            area_spot.setdefault(norm(name), []).append((x, y, 25 if big else 5))
+
+    def far_copy(name, raw, x, y):
+        """A copy of a one-of-a-kind place that sits far from where that place really is."""
+        n = norm(name)
+        if n in real_spot:
+            return all(km(p, (x, y)) > 3 for p in real_spot[n])
+        if raw not in LANDMARK:
+            return False
+        # "Tanjung Aru Beach" belongs near Tanjung Aru.
+        w = n.split()
+        for size in (4, 3, 2):
+            for i in range(len(w) - size + 1):
+                spots = area_spot.get(" ".join(w[i:i + size]))
+                if spots:
+                    return all(km((px, py), (x, y)) > r for px, py, r in spots)
+        return False
 
     def subtitle_for(x, y, own=None):
         parts = []
@@ -264,7 +325,7 @@ def main():
         lab, group = category(osm_category(tags), name)
         pois.append((name, lab, group, x, y, 0.8))
         osm_grid.add(x, y, norm(name))
-    dup_grid, skipped = Grid(0.002), 0
+    dup_grid, skipped, misplaced = Grid(0.002), 0, 0
     for name, raw, conf, x, y in sorted(ov_places, key=lambda r: -r[2]):
         name = name.strip()
         n = norm(name)
@@ -273,15 +334,30 @@ def main():
         if same(osm_grid, 0.3) or same(dup_grid, 0.1):
             skipped += 1
             continue
+        if far_copy(name, raw, x, y):
+            misplaced += 1
+            continue
         dup_grid.add(x, y, n)
         lab, group = category(raw, name)
         pois.append((name, lab, group, x, y, conf))
+    for name, raw, x, y in ov_buildings:
+        name = name.strip()
+        n = norm(name)
+        # "Store", "Dewan", "#67": labels on a campus map, not something to search for.
+        if n in GENERIC_BUILDING or not re.search(r"[a-z]{2}", n):
+            continue
+        if len(n) < 3 or any(v == n and km((px, py), (x, y)) < 0.3
+                             for grid in (osm_grid, dup_grid) for px, py, v in grid.near(x, y)):
+            continue
+        lab, group = category(raw, name)
+        pois.append((name, lab if raw else "Building", group, x, y, 0.5))
     for name, cls, x, y in other_land:
         if not any(v == norm(name) for _, _, v in osm_grid.near(x, y)):
             lab, group = category(cls, name)
             pois.append((name, lab, group, x, y, 0.5))
     pois.sort(key=lambda p: -p[5])
-    print(f"  Dropped {skipped} Overture places already in OpenStreetMap or listed twice")
+    print(f"  Dropped {skipped} Overture places already in OpenStreetMap or listed twice, "
+          f"{misplaced} far-away copies of landmarks")
 
     # --- Streets: one entry per street name per ~1.3 km, so long roads can be found from anywhere ---
     seen, streets = set(), []

@@ -83,7 +83,16 @@ export default function SearchScreen({
     setStatus('loading');
     const timer = window.setTimeout(
       () => {
-        findPlaces({ query: q, category, near: near.current, mine: mine.current, signal: ctrl.signal })
+        findPlaces({
+          query: q,
+          category,
+          near: near.current,
+          mine: mine.current,
+          signal: ctrl.signal,
+          onFirst: (list) => {
+            if (!ctrl.signal.aborted) setResults(list);
+          },
+        })
           .then((list) => {
             setResults(list);
             setStatus('done');

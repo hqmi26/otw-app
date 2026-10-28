@@ -5,8 +5,9 @@ import { distance, type LngLat } from './geo';
 /*
  * Sabah's places, searched on the phone itself. public/places/sabah.json is
  * rebuilt every month from Overture Maps and OpenStreetMap by
- * scripts/build_places.py. Typing a search sends nothing over the internet,
- * and once the list has loaded it works with a weak signal too.
+ * scripts/build_places.py. Matches show straight away, and once the list has
+ * loaded they work with a weak signal too (search.ts also asks Photon, for
+ * places in other states).
  */
 
 /** Which search chip a place belongs to ('' = none). */
@@ -40,6 +41,11 @@ export interface PlacesIndex {
   subsByWord: Map<number, number[]>;
   /** Subtitle → places that have it. */
   placesBySub: number[][];
+  /** Words of each kind of place ("Dental clinic"), and kind → places. */
+  catWords: Set<string>[];
+  placesByCat: number[][];
+  /** Each name's words in one spelling, filled in as searches need them. */
+  wholeName: (string | undefined)[];
   byGroup: Map<PlaceGroup, number[]>;
 }
 
@@ -49,7 +55,7 @@ export interface Hit {
   score: number;
 }
 
-/** Short forms people type, mapped to the word used in place names. */
+/** Short forms people type, mapped to the words used in place names (both are changed the same way). */
 const SHORT: Record<string, string[]> = {
   jln: ['jalan'],
   jl: ['jalan'],
@@ -61,34 +67,67 @@ const SHORT: Record<string, string[]> = {
   kampong: ['kampung'],
   sg: ['sungai'],
   bkt: ['bukit'],
+  bdr: ['bandar'],
   sri: ['seri'],
-  mosque: ['masjid'],
   hosp: ['hospital'],
   kk: ['kota', 'kinabalu'],
   qe: ['queen', 'elizabeth'],
+  sk: ['sekolah', 'kebangsaan'],
+  smk: ['sekolah', 'menengah', 'kebangsaan'],
+  sjk: ['sekolah', 'jenis', 'kebangsaan'],
+  kv: ['kolej', 'vokasional'],
+  mcd: ['mcdonalds'],
+  mekdi: ['mcdonalds'],
 };
+/**
+ * Words that mean the same thing. A place is findable by any of them: "clinic" finds
+ * "Klinik Seri Telipok", "mount kinabalu" finds "Gunung Kinabalu" and, through the
+ * kind of place, "klinik gigi" finds a dentist listed as "Dental clinic".
+ */
+const SAME = [
+  'klinik clinic', 'restoran restaurant', 'kafe cafe', 'farmasi pharmacy', 'sekolah school', 'masjid mosque',
+  'gereja church', 'pasar market', 'polis police', 'stesen station', 'bomba fire', 'gigi dental dentist',
+  'pantai beach', 'pulau island', 'gunung mount mountain mt', 'bukit hill', 'sungai river', 'tasik lake',
+  'pejabat office', 'kedai shop store', 'runcit grocery', 'dobi laundry laundromat', 'bengkel workshop automotive',
+  'tayar tire tyre', 'kereta car', 'cuci wash', 'minyak petrol gas fuel', 'penginapan lodging', 'terbang airport',
+  'muzium museum', 'perpustakaan library', 'universiti university', 'kolej college', 'politeknik polytechnic',
+  'imigresen immigration', 'pos post', 'salun salon', 'gunting barber', 'emas jewelry gold', 'makan food eatery',
+  'kopi coffee',
+].map((group) => group.split(' '));
+const ALIAS = new Map(SAME.flatMap((group) => group.map((w) => [w, group] as const)));
+/** One spelling per meaning, to compare a whole name with what's typed. */
+const canon = (w: string) => ALIAS.get(w)?.[0] ?? w;
 /** "Al-Amin" is also findable as "alamin". */
 const ARTICLES = new Set(['al', 'ar', 'as', 'an', 'at', 'ad', 'asy', 'ash', 'az']);
-/** Words people add that the place's own name may leave out: "surau TAMAN indah permai". */
-const OPTIONAL = new Set(['taman', 'kampung', 'jalan', 'lorong', 'di', 'dekat', 'kat', 'near', 'the', 'of']);
+/**
+ * Words people add that the place's own name may leave out: "surau TAMAN indah permai",
+ * "KEDAI tayar", "BALAI polis".
+ */
+const OPTIONAL = new Set([
+  'taman', 'kampung', 'jalan', 'lorong', 'lapangan', 'kedai', 'balai', 'di', 'dekat', 'kat', 'near', 'the', 'of',
+]);
 /** Shown first when the same score: areas, then places, then streets. */
 const GROUP_BONUS: Partial<Record<PlaceGroup, number>> = { area: 0.8, street: 0 };
 
+const ASCII = /^[\x00-\x7f]*$/;
+
 export function words(text: string): string[] {
-  return text
-    .normalize('NFKD')
-    .replace(/[̀-ͯ]/g, '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, ' ')
-    .trim()
-    .split(' ')
-    .filter(Boolean)
-    .flatMap((w) => SHORT[w] ?? [w]);
+  // Most names are plain ASCII; skipping the accent step for them makes indexing ~2× faster.
+  const plain = ASCII.test(text) ? text : text.normalize('NFKD').replace(/[\u0300-\u036f]/g, '');
+  const out: string[] = [];
+  // "McDonald's" is one word, "mcdonalds".
+  for (const w of plain.toLowerCase().replace(/['’`]/g, '').split(/[^a-z0-9]+/)) {
+    if (!w) continue;
+    const short = SHORT[w];
+    if (short) out.push(...short);
+    else out.push(w);
+  }
+  return out;
 }
 
 function nameWords(name: string): string[] {
   const w = words(name);
-  const out = new Set(w);
+  const out = new Set(w.flatMap((x) => ALIAS.get(x) ?? [x]));
   for (let i = 0; i < w.length - 1; i++) if (ARTICLES.has(w[i])) out.add(w[i] + w[i + 1]);
   return [...out];
 }
@@ -151,12 +190,30 @@ export function buildIndex(file: PlaceFile): PlacesIndex {
   const subsByWord = new Map<number, number[]>();
   subWords.forEach((ids, s) => ids.forEach((id) => pushTo(subsByWord, id, s)));
   const placesBySub: number[][] = file.subtitles.map(() => []);
+  const catWords = file.cats.map(([label]) => new Set(nameWords(label)));
+  const placesByCat: number[][] = file.cats.map(() => []);
   const byGroup = new Map<PlaceGroup, number[]>();
   rows.forEach(([, cat, , , sub], i) => {
     if (sub >= 0) placesBySub[sub].push(i);
+    placesByCat[cat].push(i);
     pushTo(byGroup, file.cats[cat][1], i);
   });
-  return { file, vocab, vocabId, wordStart, wordIds, postStart, posts, subWords, subsByWord, placesBySub, byGroup };
+  return {
+    file,
+    vocab,
+    vocabId,
+    wordStart,
+    wordIds,
+    postStart,
+    posts,
+    subWords,
+    subsByWord,
+    placesBySub,
+    catWords,
+    placesByCat,
+    wholeName: new Array<string | undefined>(rows.length),
+    byGroup,
+  };
 }
 
 let loading: Promise<PlacesIndex | null> | null = null;
@@ -222,8 +279,9 @@ function wordMatches(ix: PlacesIndex, q: string): Map<number, number> {
       if (!found.has(i)) found.set(i, 2);
     }
   }
-  if (q.length >= 4) {
-    // Spelling slips: "munawarah" for "munawwarah", also while still typing the word.
+  // Spelling slips: "munawarah" for "munawwarah", also while still typing the word. Not for a
+  // short word that's already found as typed: "polis" shouldn't also find "Politeknik".
+  if (q.length >= 7 || (q.length >= 4 && found.size === 0)) {
     const end = lowerBound(ix.vocab, q[0] + '￿');
     for (let i = lowerBound(ix.vocab, q[0]); i < end; i++) {
       if (found.has(i)) continue;
@@ -234,6 +292,20 @@ function wordMatches(ix: PlacesIndex, q: string): Map<number, number> {
       }
     }
   }
+  return found;
+}
+
+/** Kinds of place a typed word fits: "police" → "Police station", "gigi" → "Dental clinic". */
+function catMatches(ix: PlacesIndex, q: string): Set<number> {
+  const found = new Set<number>();
+  ix.catWords.forEach((list, c) => {
+    for (const w of list) {
+      if (w === q || (q.length >= 3 && w.startsWith(q))) {
+        found.add(c);
+        return;
+      }
+    }
+  });
   return found;
 }
 
@@ -248,6 +320,7 @@ export function searchIndex(ix: PlacesIndex, query: string, near: LngLat | null,
     for (const [id, weight] of m) if (weight >= 2) ix.subsByWord.get(id)?.forEach((s) => subs.add(s));
     return subs;
   });
+  const kinds = qs.map((q) => catMatches(ix, q));
   const required = qs.map((q) => !OPTIONAL.has(q));
   if (!required.some(Boolean)) required.fill(true);
 
@@ -259,22 +332,36 @@ export function searchIndex(ix: PlacesIndex, query: string, near: LngLat | null,
     let size = 0;
     for (const id of m.keys()) size += ix.postStart[id + 1] - ix.postStart[id];
     for (const s of subMatches[k]) size += ix.placesBySub[s].length;
+    for (const c of kinds[k]) size += ix.placesByCat[c].length;
     if (size < seedSize) {
       seed = k;
       seedSize = size;
     }
   });
+  // "police station", "klinik gigi", "cafe": every word describes a kind of place,
+  // so the closest places of that kind come first, whatever they're called.
+  const kindOfAll = kinds
+    .filter((_, k) => required[k])
+    .reduce((all, next) => new Set([...all].filter((c) => next.has(c))));
   const candidates = new Set<number>();
   for (const id of matches[seed].keys()) {
     for (let p = ix.postStart[id]; p < ix.postStart[id + 1]; p++) candidates.add(ix.posts[p]);
   }
   for (const s of subMatches[seed]) ix.placesBySub[s].forEach((i) => candidates.add(i));
+  for (const c of kinds[seed]) ix.placesByCat[c].forEach((i) => candidates.add(i));
 
-  const whole = qs.join(' ');
+  const whole = qs.map(canon).join(' ');
   const hits: { i: number; score: number }[] = [];
   for (const i of candidates) {
+    const [, cat, x, y] = ix.file.places[i];
+    const bonus = (GROUP_BONUS[groupOf(ix, i)] ?? 0.4) - distancePenalty(near, [x / 1e5, y / 1e5]);
+    if (kindOfAll.has(cat)) {
+      hits.push({ i, score: 3 * qs.length + bonus });
+      continue;
+    }
     let score = 0;
     let inName = 0;
+    let inKind = 0;
     let ok = true;
     for (let k = 0; k < qs.length && ok; k++) {
       let best = 0;
@@ -282,19 +369,26 @@ export function searchIndex(ix: PlacesIndex, query: string, near: LngLat | null,
       if (best > 0) {
         score += best;
         inName++;
+      } else if (kinds[k].has(ix.file.places[i][1])) {
+        score += 1;
+        inKind++;
       } else if (subMatches[k].has(ix.file.places[i][4])) {
         score += 1;
       } else if (required[k]) {
         ok = false;
       }
     }
-    if (!ok || inName === 0) continue;
-    const name = words(ix.file.places[i][0]).join(' ');
+    // The area alone isn't a hit: "telipok" shouldn't list every shop in Telipok.
+    if (!ok || inName + inKind === 0) continue;
+    const name = (ix.wholeName[i] ??= words(ix.file.places[i][0]).map(canon).join(' '));
     if (name === whole) score += 2.5;
     else if (name.startsWith(whole)) score += 1.5;
-    const [, , x, y] = ix.file.places[i];
-    score += (GROUP_BONUS[groupOf(ix, i)] ?? 0.4) - distancePenalty(near, [x / 1e5, y / 1e5]);
-    hits.push({ i, score });
+    hits.push({ i, score: score + bonus });
+  }
+  if (hits.length === 0 && qs.length > 1) {
+    // "mcd telipok" and no McDonald's listed in Telipok: the closest McDonald's instead.
+    const rest = qs.filter((_, k) => subMatches[k].size === 0 || kinds[k].size > 0);
+    if (rest.length > 0 && rest.length < qs.length) return searchIndex(ix, rest.join(' '), near, limit);
   }
   // Ties keep the file's order, which puts Overture's most confident places first.
   hits.sort((a, b) => b.score - a.score || a.i - b.i);

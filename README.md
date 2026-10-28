@@ -70,11 +70,18 @@ open http://localhost:8788. It uses a local test database in `.wrangler/`.
 
 ## Sabah places (search and map labels)
 
-`public/places/sabah.json` holds Sabah's places, tamans, kampungs and streets from
-**Overture Maps** (business and place data from Meta, Microsoft and others) plus
-**OpenStreetMap**. The phone downloads it once (about 1.2 MB) and searches it
-itself, so typing a search sends nothing over the internet. Outside Sabah, or when
-nothing in Sabah matches, search falls back to Photon.
+`public/places/sabah.json` holds Sabah's places, tamans, kampungs, streets, peaks,
+islands, beaches and named buildings from **Overture Maps** (business and place data
+from Meta, Microsoft and others) plus **OpenStreetMap**. The phone downloads it once
+(about 1.2 MB) and searches it itself, so Sabah results show at once, even on a weak
+signal. Search also asks Photon, for places in other states; those are listed after
+the Sabah places nearby.
+
+Search understands Malay and English words for the same thing ("klinik gigi" finds a
+"Dental clinic", "mount kinabalu" finds "Gunung Kinabalu") and short forms ("mcd",
+"smk", "kk"). A search that only names a kind of place ("police station", "kedai
+tayar") lists the closest ones. Meta has copies of landmarks wherever someone made a
+page ("Mount Kinabalu" in Putatan), so the build drops copies far from the real spot.
 
 The list is rebuilt **automatically on the 28th of each month** by the GitHub Action
 `.github/workflows/places.yml`, which commits the new file, and Cloudflare then
