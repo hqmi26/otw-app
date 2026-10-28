@@ -11,7 +11,10 @@ Matches the design canvas ("OTW – Family Navigation App"):
 - Logo intro, then a first-time login (name + phone, kept on the phone for now)
 - Our own map style (`src/lib/mapStyle.ts`) in OTW colours, light and dark
 - Home: search bar with your avatar, saved-place chips (Rumah, Rumah Atuk…), locate, Report, family panel
-- Search with Petrol / Food / Surau / Parking chips, saved places and recents
+- Search with Petrol / Food / Surau / Parking chips, saved places and recents. In Sabah it
+  searches our own list on the phone (about 50,000 places, 2,200 tamans/kampungs and 9,000 streets)
+- Sabah's places as coloured labels on the map (tap one for directions)
+- "Add a missing place": put a place search can't find on the map yourself (on this phone for now)
 - Save any place with the ⭐ on the route sheet or the "Add" chip
 - Directions with up to two routes, ETA and arrival time (OSRM)
 - Turn-by-turn: next turn, "then…" hint, voice, mute, rerouting, screen stays on
@@ -65,12 +68,33 @@ screen size, for reproducing bugs. No location is sent.
 shows "Couldn't send". To try the whole thing, run `npm run preview:cloudflare` and
 open http://localhost:8788. It uses a local test database in `.wrangler/`.
 
+## Sabah places (search and map labels)
+
+`public/places/sabah.json` holds Sabah's places, tamans, kampungs and streets from
+**Overture Maps** (business and place data from Meta, Microsoft and others) plus
+**OpenStreetMap**. The phone downloads it once (about 1.2 MB) and searches it
+itself, so typing a search sends nothing over the internet. Outside Sabah, or when
+nothing in Sabah matches, search falls back to Photon.
+
+The list is rebuilt **automatically on the 28th of each month** by the GitHub Action
+`.github/workflows/places.yml`, which commits the new file, and Cloudflare then
+redeploys. To rebuild by hand:
+
+```bash
+pip install duckdb==2.0.0
+python scripts/build_places.py
+```
+
+Overture's data is free for commercial use (CDLA-Permissive-2.0, Apache-2.0, CC0) and
+OpenStreetMap's is ODbL; the map credit names both.
+
 ## Free services used (no API keys)
 
 | What | Service | Note |
 |---|---|---|
 | Map tiles | OpenFreeMap (OpenStreetMap data) | Free, no limits |
-| Search | Photon public server | Fair use only |
+| Search in Sabah | Our own list (`public/places/sabah.json`) | Searched on the phone |
+| Search elsewhere | Photon public server | Fair use only |
 | Routing | OSRM demo server | Demo use only |
 | Feedback | Cloudflare Pages Functions + D1 | Free tier, plenty for feedback |
 
@@ -82,7 +106,10 @@ nobody's location leaves the country.
 - `src/App.tsx` – screens, trip state, voice, rerouting
 - `src/components/MapView.tsx` – the map, markers, route lines, camera
 - `src/components/*Screen.tsx`, `RouteSheet.tsx`, `NavigationView.tsx` – the UI
-- `src/lib/api.ts` – search and routing calls
+- `src/lib/api.ts` – Photon search and routing calls
+- `src/lib/places.ts` – loads and searches Sabah's place list on the phone
+- `src/lib/search.ts` – picks where a search goes: the user's own places, Sabah's list, or Photon
+- `scripts/build_places.py` – builds Sabah's place list (run monthly by GitHub Actions)
 - `src/lib/geo.ts` – distance maths and formatting
 - `src/hooks/useNavigation.ts` – progress along the route and the demo drive
 - `functions/api/feedback.ts` – saves feedback (runs on Cloudflare, not in the phone)

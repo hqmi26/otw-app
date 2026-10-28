@@ -1,18 +1,23 @@
 import { useEffect, useRef, useState } from 'react';
-import { CATEGORIES, searchPlaces, type Place } from '../lib/api';
+import { CATEGORIES, type Place } from '../lib/api';
 import { distance, formatDistance, type LngLat } from '../lib/geo';
-import type { SavedPlace } from '../lib/models';
+import type { MyPlace, SavedPlace } from '../lib/models';
+import { findPlaces } from '../lib/search';
 import { SavedIcon } from './brand';
-import { BackIcon, ClockIcon, PinIcon, SearchIcon } from './icons';
+import { BackIcon, ClockIcon, PinIcon, PlusIcon, SearchIcon } from './icons';
 
 interface Props {
   position: LngLat | null;
   recents: Place[];
   saved: SavedPlace[];
+  /** Places the user added themselves; searched first. */
+  myPlaces: MyPlace[];
   /** Picking a place to save (from the "Add" chip) rather than to drive to. */
   forSaving: boolean;
   leaving: 'pop' | 'fade' | null;
   onPick: (place: Place) => void;
+  /** "Can't find it?" – put a missing place on the map. */
+  onAddMissing: () => void;
   onBack: () => void;
 }
 
@@ -20,13 +25,25 @@ type Status = 'idle' | 'loading' | 'done' | 'error';
 type Category = (typeof CATEGORIES)[number];
 
 /** Search (design screen 2). */
-export default function SearchScreen({ position, recents, saved, forSaving, leaving, onPick, onBack }: Props) {
+export default function SearchScreen({
+  position,
+  recents,
+  saved,
+  myPlaces,
+  forSaving,
+  leaving,
+  onPick,
+  onAddMissing,
+  onBack,
+}: Props) {
   const [query, setQuery] = useState('');
   const [category, setCategory] = useState<Category | null>(null);
   const [results, setResults] = useState<Place[]>([]);
   const [status, setStatus] = useState<Status>('idle');
   const near = useRef(position);
   near.current = position;
+  const mine = useRef(myPlaces);
+  mine.current = myPlaces;
   const input = useRef<HTMLInputElement>(null);
 
   // Let the slide-in finish before the keyboard opens; doing both at once
@@ -58,7 +75,7 @@ export default function SearchScreen({ position, recents, saved, forSaving, leav
     setStatus('loading');
     const timer = window.setTimeout(
       () => {
-        searchPlaces(q, near.current, ctrl.signal, category?.osmTag)
+        findPlaces({ query: q, category, near: near.current, mine: mine.current, signal: ctrl.signal })
           .then((list) => {
             setResults(list);
             setStatus('done');
@@ -67,13 +84,15 @@ export default function SearchScreen({ position, recents, saved, forSaving, leav
             if ((e as Error).name !== 'AbortError') setStatus('error');
           });
       },
-      category ? 0 : 300,
+      // Sabah is searched on the phone, so a short pause is enough.
+      category ? 0 : 200,
     );
     return () => {
       window.clearTimeout(timer);
       ctrl.abort();
     };
-  }, [query, category]);
+    // myPlaces: search again after the user adds or removes one of their own places.
+  }, [query, category, myPlaces]);
 
   const searching = category != null || query.trim().length >= 2;
   const distanceTo = (place: Place) =>
@@ -143,6 +162,17 @@ export default function SearchScreen({ position, recents, saved, forSaving, leav
                   {distanceTo(place)}
                 </button>
               ))}
+              {status === 'done' && !forSaving && (
+                <button type="button" className="row" onClick={onAddMissing}>
+                  <span className="row-icon">
+                    <PlusIcon size={20} />
+                  </span>
+                  <span className="row-text">
+                    <span className="row-title accent">Can’t find it? Add a missing place</span>
+                    <span className="row-sub">Put it on the map yourself – it shows up straight away</span>
+                  </span>
+                </button>
+              )}
             </div>
           </>
         ) : (

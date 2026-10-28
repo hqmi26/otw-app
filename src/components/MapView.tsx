@@ -1,22 +1,25 @@
-import { useEffect, useRef } from 'react';
-import type { FeatureCollection } from 'geojson';
+import { useEffect, useRef, type MutableRefObject } from 'react';
+import type { FeatureCollection, Point } from 'geojson';
 import {
   AttributionControl,
   LngLatBounds,
   Map as MapLibreMap,
   Marker,
   setWorkerUrl,
+  type ExpressionSpecification,
   type GeoJSONSource,
   type LngLatLike,
+  type MapLayerMouseEvent,
 } from 'maplibre-gl';
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?url';
 
 // MapLibre 6 loads its tile worker from a separate file; point it at the copy Vite serves.
 setWorkerUrl(workerUrl);
-import type { Route } from '../lib/api';
+import type { Place, Route } from '../lib/api';
 import type { LngLat } from '../lib/geo';
-import { buildMapStyle } from '../lib/mapStyle';
-import { HAZARDS, type HazardReport } from '../lib/models';
+import { buildMapStyle, labelHalo, PLACE_COLORS, POI_LABEL_LAYER, poiLabelFilter } from '../lib/mapStyle';
+import { HAZARDS, myPlaceToPlace, type HazardReport, type MyPlace } from '../lib/models';
+import { mapFeatures, toPlace, type PlacesIndex } from '../lib/places';
 import type { Theme } from '../hooks/useTheme';
 
 const ROUTE_COLORS: Record<Theme, { route: string; casing: string; alt: string }> = {
@@ -31,7 +34,18 @@ const SOURCE = 'otw-routes';
 const CASING_LAYER = 'otw-route-casing';
 const LINE_LAYER = 'otw-route-line';
 
-export type MapMode = 'browse' | 'preview' | 'nav';
+const PLACES_SOURCE = 'otw-places';
+const MINE_SOURCE = 'otw-my-places';
+/** Surau, petrol, parking and food: shown a little further out than the rest. */
+const PLACE_KEY_LAYER = 'otw-places-key';
+const PLACE_MORE_LAYER = 'otw-places-more';
+const MINE_DOT_LAYER = 'otw-my-places-dot';
+const MINE_LABEL_LAYER = 'otw-my-places-label';
+const PLACE_LAYERS = [PLACE_KEY_LAYER, PLACE_MORE_LAYER, MINE_DOT_LAYER, MINE_LABEL_LAYER];
+const KEY_GROUPS = ['surau', 'fuel', 'parking', 'food'];
+
+/** browse: home map · preview: route choice · nav: driving · pick: placing a missing place under the pin. */
+export type MapMode = 'browse' | 'preview' | 'nav' | 'pick';
 
 interface Props {
   theme: Theme;
@@ -53,6 +67,15 @@ interface Props {
   onUserMove: () => void;
   /** Press and hold (or right-click) on the browse map. */
   onLongPress: (coord: LngLat) => void;
+  /** Sabah's place list, drawn as labels once it has loaded. */
+  places: PlacesIndex | null;
+  myPlaces: MyPlace[];
+  /** A place label was tapped on the browse map. */
+  onPickPlace: (place: Place) => void;
+  /** Where the pin starts in pick mode. */
+  pickStart: LngLat | null;
+  /** Set by the map in pick mode: returns the spot under the pin. */
+  pickRef: MutableRefObject<(() => LngLat | null) | null>;
 }
 
 const LONG_PRESS_MS = 550;
@@ -110,6 +133,85 @@ function addRouteLayers(map: MapLibreMap, theme: Theme) {
   );
 }
 
+function myPlacesData(list: MyPlace[]): FeatureCollection<Point> {
+  return {
+    type: 'FeatureCollection',
+    features: list.map((p) => ({
+      type: 'Feature',
+      properties: { id: p.id, name: p.name },
+      geometry: { type: 'Point', coordinates: p.coord },
+    })),
+  };
+}
+
+/** Our own place labels: Sabah's list (once loaded) and the places the user added. */
+function addPlaceLayers(map: MapLibreMap, theme: Theme, places: PlacesIndex | null, mine: MyPlace[]) {
+  const c = PLACE_COLORS[theme];
+  const halo = labelHalo(theme);
+  if (!map.getSource(MINE_SOURCE)) {
+    map.addSource(MINE_SOURCE, { type: 'geojson', data: myPlacesData(mine) });
+    map.addLayer({
+      id: MINE_DOT_LAYER,
+      type: 'circle',
+      source: MINE_SOURCE,
+      paint: { 'circle-radius': 6, 'circle-color': '#0E7C6B', 'circle-stroke-color': '#FFFFFF', 'circle-stroke-width': 2 },
+    });
+    map.addLayer({
+      id: MINE_LABEL_LAYER,
+      type: 'symbol',
+      source: MINE_SOURCE,
+      minzoom: 12,
+      layout: {
+        'text-field': ['get', 'name'],
+        'text-font': ['Noto Sans Bold'],
+        'text-size': 12.5,
+        'text-anchor': 'top',
+        'text-offset': [0, 0.8],
+        'text-max-width': 9,
+      },
+      paint: { 'text-color': c.mine, 'text-halo-color': halo, 'text-halo-width': 1.6 },
+    });
+  }
+  if (!places || map.getSource(PLACES_SOURCE)) return;
+  const color: ExpressionSpecification = [
+    'match',
+    ['get', 'group'],
+    'surau', c.surau,
+    'food', c.food,
+    'fuel', c.fuel,
+    'parking', c.parking,
+    'shop', c.shop,
+    c[''],
+  ];
+  // Labels only (like the base map's), drawn under the user's own places.
+  map.addSource(PLACES_SOURCE, { type: 'geojson', data: mapFeatures(places), attribution: places.file.credit, maxzoom: 16 });
+  const label = (id: string, minzoom: number, keyGroups: boolean, font: string, size: number) =>
+    map.addLayer(
+      {
+        id,
+        type: 'symbol',
+        source: PLACES_SOURCE,
+        minzoom,
+        filter: ['match', ['get', 'group'], KEY_GROUPS, keyGroups, !keyGroups],
+        layout: {
+          'text-field': ['get', 'name'],
+          'text-font': [font],
+          'text-size': size,
+          'text-max-width': 8,
+          'text-padding': 3,
+          // Lower index = Overture is more sure the place is real; those win when labels overlap.
+          'symbol-sort-key': ['get', 'i'],
+        },
+        paint: { 'text-color': color, 'text-halo-color': halo, 'text-halo-width': 1.4 },
+      },
+      MINE_DOT_LAYER,
+    );
+  label(PLACE_KEY_LAYER, 14.5, true, 'Noto Sans Bold', 11.5);
+  label(PLACE_MORE_LAYER, 16, false, 'Noto Sans Regular', 11);
+  // Inside Sabah our list replaces the base map's shop and place labels (no doubles).
+  map.setFilter(POI_LABEL_LAYER, poiLabelFilter(places.file.border));
+}
+
 /**
  * "You are here". On the map: a dot with a beam showing which way the phone
  * points. While navigating: a big arrow puck that stays upright on screen.
@@ -145,6 +247,7 @@ function makeDestinationMarker(): HTMLElement {
 
 export default function MapView(props: Props) {
   const container = useRef<HTMLDivElement>(null);
+  const pickPin = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const userMarker = useRef<Marker | null>(null);
   const destMarker = useRef<Marker | null>(null);
@@ -172,7 +275,30 @@ export default function MapView(props: Props) {
       const p = latest.current;
       addRouteLayers(map, shownTheme.current);
       (map.getSource(SOURCE) as GeoJSONSource).setData(routeData(p.routes, p.selectedRoute, p.mode));
+      addPlaceLayers(map, shownTheme.current, p.places, p.myPlaces);
+      showPlaceLabels(map, p.mode !== 'nav');
     });
+    // Tap a place label to get directions there.
+    const onPlaceTap = (e: MapLayerMouseEvent) => {
+      const p = latest.current;
+      const tapped = e.features?.[0]?.properties;
+      if (p.mode !== 'browse' || !tapped) return;
+      if (typeof tapped.i === 'number' && p.places) {
+        p.onPickPlace(toPlace(p.places, tapped.i));
+      } else {
+        const own = p.myPlaces.find((m) => m.id === tapped.id);
+        if (own) p.onPickPlace(myPlaceToPlace(own));
+      }
+    };
+    for (const id of PLACE_LAYERS) {
+      map.on('click', id, onPlaceTap);
+      map.on('mouseenter', id, () => {
+        if (latest.current.mode === 'browse') map.getCanvas().style.cursor = 'pointer';
+      });
+      map.on('mouseleave', id, () => {
+        map.getCanvas().style.cursor = '';
+      });
+    }
     map.on('click', LINE_LAYER, (e) => {
       const index = e.features?.[0]?.properties?.index;
       if (latest.current.mode === 'preview' && typeof index === 'number') latest.current.onSelectRoute(index);
@@ -249,6 +375,54 @@ export default function MapView(props: Props) {
     const source = mapRef.current?.getSource(SOURCE) as GeoJSONSource | undefined;
     source?.setData(routeData(props.routes, props.selectedRoute, props.mode));
   }, [props.routes, props.selectedRoute, props.mode]);
+
+  // Sabah's place labels, once the list has loaded (the style may still be loading: then style.load adds them).
+  useEffect(() => {
+    const map = mapRef.current;
+    if (map?.getSource(SOURCE)) addPlaceLayers(map, shownTheme.current, props.places, latest.current.myPlaces);
+  }, [props.places]);
+
+  useEffect(() => {
+    const source = mapRef.current?.getSource(MINE_SOURCE) as GeoJSONSource | undefined;
+    source?.setData(myPlacesData(props.myPlaces));
+  }, [props.myPlaces]);
+
+  // While driving, only the road matters: hide shop and place labels.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (map?.getSource(SOURCE)) showPlaceLabels(map, props.mode !== 'nav');
+  }, [props.mode]);
+
+  // Pick mode: the pin stays in the middle of the visible map and the map moves under it.
+  props.pickRef.current = () => {
+    const map = mapRef.current;
+    const pin = pickPin.current?.getBoundingClientRect();
+    const box = container.current?.getBoundingClientRect();
+    if (!map || !pin || !box) return null;
+    const at = map.unproject([pin.left + pin.width / 2 - box.left, pin.bottom - box.top]);
+    return [at.lng, at.lat];
+  };
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || props.mode !== 'pick') return;
+    // Wait two frames so the sheet has its real height and the pin its final spot.
+    let frame = requestAnimationFrame(() => {
+      frame = requestAnimationFrame(() => {
+        const pin = pickPin.current?.getBoundingClientRect();
+        const box = container.current?.getBoundingClientRect();
+        if (!pin || !box) return;
+        map.flyTo({
+          center: latest.current.pickStart ?? map.getCenter(),
+          zoom: Math.max(map.getZoom(), 17.5),
+          offset: [0, pin.bottom - box.top - box.height / 2],
+          pitch: 0,
+          bearing: 0,
+          duration: 700,
+        });
+      });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [props.mode]);
 
   // The user's dot (or arrow while navigating).
   useEffect(() => {
@@ -352,7 +526,8 @@ export default function MapView(props: Props) {
     const map = mapRef.current;
     const was = prevMode.current;
     prevMode.current = props.mode;
-    if (!map || props.mode !== 'browse' || was === 'browse') return;
+    // After adding a place, stay where it was put.
+    if (!map || props.mode !== 'browse' || was === 'browse' || was === 'pick') return;
     const p = latest.current.position;
     map.easeTo({
       center: p ?? (was === 'nav' ? DEFAULT_CENTER : map.getCenter()),
@@ -372,5 +547,23 @@ export default function MapView(props: Props) {
     map.flyTo({ center: p ?? DEFAULT_CENTER, zoom: p ? 16 : 12, duration: 800 });
   }, [props.recenterKey]);
 
-  return <div ref={container} className="map" />;
+  return (
+    <>
+      <div ref={container} className="map" />
+      {props.mode === 'pick' && (
+        <div ref={pickPin} className="pick-pin" aria-hidden="true">
+          <svg viewBox="0 0 34 40">
+            <path d="M17 39s-15-13-15-23a15 15 0 0 1 30 0c0 10-15 23-15 23z" />
+            <circle cx="17" cy="16" r="5.5" />
+          </svg>
+        </div>
+      )}
+    </>
+  );
+}
+
+function showPlaceLabels(map: MapLibreMap, visible: boolean) {
+  for (const id of PLACE_LAYERS) {
+    if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', visible ? 'visible' : 'none');
+  }
 }

@@ -1,8 +1,9 @@
 import type { LngLat } from './geo';
+import type { PlaceGroup } from './places';
 
 /*
  * Free public services, no API keys:
- *  - Photon (komoot) for place search
+ *  - Photon (komoot) for place search outside Sabah (Sabah is searched on the phone, see places.ts)
  *  - OSRM demo server for driving routes
  * Both are fine for family testing. For a public launch, self-host them on a
  * server in Malaysia (see README) so nobody's location leaves the country.
@@ -34,12 +35,12 @@ interface PhotonFeature {
 }
 
 /** Quick category searches for the chips on the search screen. */
-export const CATEGORIES = [
-  { label: 'Petrol', query: 'petrol', osmTag: 'amenity:fuel' },
-  { label: 'Food', query: 'restoran', osmTag: 'amenity:restaurant' },
-  { label: 'Surau', query: 'surau', osmTag: 'amenity:place_of_worship' },
-  { label: 'Parking', query: 'parking', osmTag: 'amenity:parking' },
-] as const;
+export const CATEGORIES: readonly { label: string; query: string; osmTag: string; group: PlaceGroup }[] = [
+  { label: 'Petrol', query: 'petrol', osmTag: 'amenity:fuel', group: 'fuel' },
+  { label: 'Food', query: 'restoran', osmTag: 'amenity:restaurant', group: 'food' },
+  { label: 'Surau', query: 'surau', osmTag: 'amenity:place_of_worship', group: 'surau' },
+  { label: 'Parking', query: 'parking', osmTag: 'amenity:parking', group: 'parking' },
+];
 
 export async function searchPlaces(
   query: string,
