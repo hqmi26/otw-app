@@ -1,13 +1,15 @@
 import type { Place, Route } from '../lib/api';
 import { formatClock, formatDistance, formatDuration } from '../lib/geo';
 import { useSheetHeight } from '../hooks/useSheetHeight';
-import { BackIcon, NavArrowIcon, StarIcon } from './icons';
+import { BackIcon, CloseIcon, NavArrowIcon, PlusIcon, StarIcon } from './icons';
 
 interface Props {
   destination: Place;
   originLabel: string;
   /** Label the place is saved under, e.g. "Rumah Atuk". */
   savedAs: string | null;
+  /** A stop on the way, e.g. the school. */
+  stop: Place | null;
   routes: Route[] | null;
   error: string | null;
   selected: number;
@@ -18,6 +20,8 @@ interface Props {
   onRetry: () => void;
   onSave: () => void;
   onShowSteps: () => void;
+  onAddStop: () => void;
+  onRemoveStop: () => void;
   onBack: () => void;
 }
 
@@ -50,6 +54,24 @@ export default function RouteSheet(p: Props) {
             <StarIcon size={22} filled={!!p.savedAs} />
           </button>
         </div>
+
+        {p.stop ? (
+          <div className="stop-row">
+            <span className="stop-dot" aria-hidden="true" />
+            <span className="row-text">
+              <span className="row-sub">Stop on the way</span>
+              <span className="row-title">{p.stop.name}</span>
+            </span>
+            <button type="button" className="icon-btn" onClick={p.onRemoveStop} aria-label={`Remove the stop at ${p.stop.name}`}>
+              <CloseIcon size={20} />
+            </button>
+          </div>
+        ) : (
+          <button type="button" className="text-btn add-stop" onClick={p.onAddStop}>
+            <PlusIcon size={18} />
+            Add a stop
+          </button>
+        )}
 
         {!p.routes && !p.error && (
           <div className="route-cards" aria-busy="true">

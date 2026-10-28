@@ -8,7 +8,8 @@ import { AlertIcon, ChatIcon, ClockIcon, LocateIcon, PlusIcon, SearchIcon } from
 interface Props {
   profile: Profile;
   position: LngLat | null;
-  locationError: string | null;
+  /** A line about location to show under the saved places, e.g. GPS lost, or demo mode. */
+  locationNote: string | null;
   saved: SavedPlace[];
   recents: Place[];
   onSearch: () => void;
@@ -51,9 +52,9 @@ export default function HomeScreen(p: Props) {
           </button>
         </div>
 
-        {p.locationError && (
+        {p.locationNote && (
           <p className="banner" role="status">
-            {p.locationError} Showing Kuala Lumpur for now.
+            {p.locationNote}
           </p>
         )}
       </div>

@@ -29,10 +29,11 @@ function pickVoice(lang: Lang): SpeechSynthesisVoice | undefined {
   );
 }
 
-export function speak(text: string, lang: Lang = 'en') {
+/** Cuts off whatever is being said, unless `queue` is set: then it waits its turn. */
+export function speak(text: string, lang: Lang = 'en', { queue = false }: { queue?: boolean } = {}) {
   if (!supported) return;
   const synth = window.speechSynthesis;
-  synth.cancel();
+  if (!queue) synth.cancel();
   const u = new SpeechSynthesisUtterance(text);
   const voice = pickVoice(lang);
   if (voice) u.voice = voice;

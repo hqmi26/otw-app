@@ -1,10 +1,11 @@
 import type { Place, Route } from '../lib/api';
 import { formatClock, formatDistance, formatDuration } from '../lib/geo';
-import { instruction, thenText, type Lang } from '../lib/instructions';
+import { hazardName, instruction, thenText, type Lang } from '../lib/instructions';
+import type { HazardType } from '../lib/models';
 import type { Progress } from '../hooks/useNavigation';
 import { useSheetHeight } from '../hooks/useSheetHeight';
-import { ManeuverIcon } from './brand';
-import { AlertIcon, MutedIcon, NavArrowIcon, SoundIcon } from './icons';
+import { HazardIcon, ManeuverIcon } from './brand';
+import { AlertIcon, ChatIcon, MutedIcon, NavArrowIcon, SoundIcon } from './icons';
 
 interface Props {
   route: Route;
@@ -19,11 +20,15 @@ interface Props {
   demoSpeed: number | null;
   /** False after the user drags the map; shows the Re-centre button. */
   following: boolean;
+  /** The nearest reported hazard on the road ahead, in metres. */
+  hazardAhead: { type: HazardType; distance: number } | null;
   onRecenter: () => void;
   onToggleMute: () => void;
   onDemoSpeed: () => void;
   onShowSteps: () => void;
   onReport: () => void;
+  /** Opens WhatsApp with "OTW to …, arriving around …" ready to send. */
+  onSendEta: (secondsLeft: number) => void;
   onEnd: () => void;
 }
 
@@ -58,6 +63,13 @@ export default function NavigationView(p: Props) {
       </button>
 
       <div className="chips">
+        {p.hazardAhead && (
+          <span className="chip chip-warn" role="status">
+            <HazardIcon type={p.hazardAhead.type} size={18} />
+            {hazardName(p.hazardAhead.type, p.lang)} {p.lang === 'ms' ? 'di depan' : 'ahead'} ·{' '}
+            {formatDistance(p.hazardAhead.distance)}
+          </span>
+        )}
         {p.rerouting && <span className="chip">Finding a new route…</span>}
         {p.demoSpeed != null && (
           <button type="button" className="chip chip-btn" onClick={p.onDemoSpeed}>
@@ -100,6 +112,10 @@ export default function NavigationView(p: Props) {
             End
           </button>
         </div>
+        <button type="button" className="secondary-btn" onClick={() => p.onSendEta(remainingTime)}>
+          <ChatIcon size={20} />
+          {p.lang === 'ms' ? 'Hantar ETA di WhatsApp' : 'Send ETA on WhatsApp'}
+        </button>
       </section>
 
       {p.progress?.arrived && (

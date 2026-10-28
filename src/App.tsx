@@ -3,9 +3,10 @@ import MapView, { type MapMode } from './components/MapView';
 import IntroScreen from './components/IntroScreen';
 import LoginScreen from './components/LoginScreen';
 import HomeScreen from './components/HomeScreen';
-import SearchScreen from './components/SearchScreen';
+import SearchScreen, { type SearchPurpose } from './components/SearchScreen';
 import RouteSheet from './components/RouteSheet';
 import NavigationView from './components/NavigationView';
+import LocationScreen from './components/LocationScreen';
 import AccountScreen from './components/AccountScreen';
 import FamilyScreen from './components/FamilyScreen';
 import ReportSheet from './components/ReportSheet';
@@ -14,8 +15,16 @@ import StepsSheet from './components/StepsSheet';
 import FeedbackSheet from './components/FeedbackSheet';
 import { CheckIcon } from './components/icons';
 import { getRoutes, reverseGeocode, type Place, type Route } from './lib/api';
-import { bearing, distance, type LngLat } from './lib/geo';
-import { aheadPhrase, instruction, PHRASES, type Lang } from './lib/instructions';
+import {
+  bearing,
+  cumulative,
+  distance,
+  formatClock,
+  formatDuration,
+  snapToLine,
+  type LngLat,
+} from './lib/geo';
+import { aheadPhrase, hazardPhrase, instruction, PHRASES, type Lang } from './lib/instructions';
 import { rushHourFactor } from './lib/eta';
 import {
   HAZARDS,
@@ -41,17 +50,27 @@ const MODALS: Screen[] = ['report', 'save', 'steps', 'feedback'];
 /** Full-screen pages opened from home; home stays mounted underneath them. */
 const HOME_OVERLAYS: Screen[] = ['search', 'account', 'family', 'report', 'save', 'feedback'];
 
-/** Where trips start when the browser has no GPS, e.g. testing on a laptop. */
-const DEMO_START: LngLat = [101.7119, 3.1579]; // KLCC
-/** Add ?sim to the address to fake the drive even when GPS works. */
+/**
+ * Add ?sim to the address to fake the drive, e.g. testing on a laptop. It also
+ * lets the app open without location, starting trips from DEMO_START.
+ */
 const FORCE_SIM = new URLSearchParams(window.location.search).has('sim');
+const DEMO_START: LngLat = [116.0762, 5.9836]; // Kota Kinabalu city centre
 const DEMO_SPEEDS = [1, 4, 10];
+
+/** A report this close to the route counts as on it. */
+const HAZARD_ON_ROUTE_M = 40;
+/** How far ahead a hazard on the route is shown, and how far ahead it's said out loud. */
+const HAZARD_SHOW_M = 1500;
+const HAZARD_SPEAK_M = 600;
+/** Closer than this to the stop (e.g. parked at the school gate) counts as having reached it. */
+const AT_STOP_M = 150;
 
 /** Pixels the UI covers at the top/bottom, so the map centres in the visible gap. */
 const INSETS: Partial<Record<Screen, { top: number; bottom: number }>> = {
   home: { top: 130, bottom: 300 },
-  route: { top: 80, bottom: 330 },
-  nav: { top: 200, bottom: 120 },
+  route: { top: 80, bottom: 380 },
+  nav: { top: 200, bottom: 180 },
 };
 const NO_INSETS = { top: 0, bottom: 0 };
 
@@ -126,16 +145,25 @@ export default function App() {
   const [muted, setMuted] = useState(false);
   const [rerouting, setRerouting] = useState(false);
   const [demoSpeedIdx, setDemoSpeedIdx] = useState(0);
-  const [searchForSaving, setSearchForSaving] = useState(false);
+  const [searchPurpose, setSearchPurpose] = useState<SearchPurpose>('go');
   const [placeToSave, setPlaceToSave] = useState<Place | null>(null);
+  /** A stop on the way, e.g. fetching Adik from school on the way home. */
+  const [stop, setStop] = useState<Place | null>(null);
 
   const realPos = geo.fix?.coord ?? null;
-  const origin = realPos ?? DEMO_START;
+  const origin = realPos ?? (FORCE_SIM ? DEMO_START : null);
+  // OTW needs to know where the phone is; until then a screen asks for location.
+  // Once there's been a fix, a later GPS hiccup (a tunnel) doesn't lock the app.
+  const locationReady = origin != null;
+  const locationNote = realPos
+    ? geo.error && `${geo.error} Showing where you were last.`
+    : 'Demo mode: trips start from KK city centre.';
 
   // Forget the trip once the user has backed out of it.
   useEffect(() => {
     if (!stack.includes('route') && !stack.includes('nav')) {
       setDestination(null);
+      setStop(null);
       setRoutes(null);
       setActiveRoute(null);
       stopSpeaking();
@@ -143,14 +171,14 @@ export default function App() {
   }, [stack]);
 
   const routeRequest = useRef<AbortController | null>(null);
-  const fetchRoutes = useCallback((from: LngLat, to: Place) => {
+  const fetchRoutes = useCallback((from: LngLat, to: Place, via: Place | null) => {
     routeRequest.current?.abort();
     const ctrl = new AbortController();
     routeRequest.current = ctrl;
     setRoutes(null);
     setRouteError(null);
     setSelected(0);
-    getRoutes(from, to.coord, ctrl.signal)
+    getRoutes(from, to.coord, ctrl.signal, via)
       .then(setRoutes)
       .catch((e: Error) => {
         if (e.name === 'AbortError') return;
@@ -163,9 +191,11 @@ export default function App() {
   }, []);
 
   const openRoute = (place: Place, remember = true) => {
+    if (!origin) return;
     if (remember) addRecent(place);
     setDestination(place);
-    fetchRoutes(origin, place);
+    setStop(null);
+    fetchRoutes(origin, place, null);
     go('route');
   };
 
@@ -194,12 +224,27 @@ export default function App() {
   };
 
   const pickFromSearch = (place: Place) => {
-    if (searchForSaving) {
+    if (searchPurpose === 'save') {
       setPlaceToSave(place);
       go('save');
+    } else if (searchPurpose === 'stop') {
+      if (origin && destination) {
+        setStop(place);
+        fetchRoutes(origin, destination, place);
+      }
+      back();
     } else {
       openRoute(place);
     }
+  };
+
+  const addStop = () => {
+    setSearchPurpose('stop');
+    go('search');
+  };
+  const removeStop = () => {
+    setStop(null);
+    if (origin && destination) fetchRoutes(origin, destination, null);
   };
 
   const startTrip = () => {
@@ -231,7 +276,7 @@ export default function App() {
       { label, kind, place },
     ]);
     showToast(`Saved as ${label}`);
-    if (searchForSaving) backTo(0);
+    if (searchPurpose === 'save') backTo(0);
     else back();
   };
   const removeSaved = (label: string) => {
@@ -240,6 +285,19 @@ export default function App() {
     back();
   };
   const savedAs = destination ? (saved.find((s) => s.place.id === destination.id)?.label ?? null) : null;
+
+  // --- Send ETA: opens WhatsApp with the message ready, and the driver picks the chat. ---
+  const sendEta = (secondsLeft: number) => {
+    if (!destination) return;
+    const place = savedAs ?? destination.name;
+    const left = formatDuration(secondsLeft);
+    const at = formatClock(new Date(Date.now() + secondsLeft * 1000));
+    const text =
+      lang === 'ms'
+        ? `OTW ke ${place} 🚗 Sampai dalam ${left}, lebih kurang pukul ${at}.`
+        : `OTW to ${place} 🚗 Arriving in about ${left}, around ${at}.`;
+    window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank', 'noopener');
+  };
 
   // --- Where the car is while navigating ---
   const simulate = base === 'nav' && (FORCE_SIM || !realPos);
@@ -277,6 +335,14 @@ export default function App() {
   const shownNavPos = progress?.onRoad?.coord ?? navPos;
   const travelHeading = progress?.onRoad?.heading ?? (simulate ? (sim?.heading ?? null) : gpsHeading);
   const navHeading = driving ? travelHeading : (compass ?? travelHeading);
+
+  // The stop counts as done once the route's "stop" turn is behind the car.
+  const stopPassed =
+    base === 'nav' &&
+    activeRoute != null &&
+    progress != null &&
+    !activeRoute.steps.some((s, i) => s.type === 'stop' && i >= progress.stepIndex);
+  const shownStop = stopPassed ? null : stop;
 
   // The camera follows the car until the user drags the map to look around.
   const [following, setFollowing] = useState(true);
@@ -343,18 +409,21 @@ export default function App() {
     offRouteCount.current = 0;
     lastReroute.current = Date.now();
     setRerouting(true);
-    getRoutes(realPos, destination.coord)
+    // Still on the way to the stop: the new route goes through it too.
+    const via = shownStop && distance(realPos, shownStop.coord) > AT_STOP_M ? shownStop : null;
+    getRoutes(realPos, destination.coord, undefined, via)
       .then((list) => {
         spoken.current.clear();
         pace.current = null;
         setActiveRoute(list[0]);
+        if (!via) setStop(null);
         if (!muted) speak(PHRASES.rerouted[lang], lang);
       })
       .catch(() => {
         // Keep the old route; try again on the next fixes.
       })
       .finally(() => setRerouting(false));
-  }, [base, simulate, progress, destination, realPos, rerouting, muted, lang]);
+  }, [base, simulate, progress, destination, shownStop, realPos, rerouting, muted, lang]);
 
   // Keep the screen on while driving.
   useEffect(() => {
@@ -385,6 +454,31 @@ export default function App() {
     showToast(`${label} reported`);
     back();
   };
+
+  // Reports on the road ahead: a chip from 1.5 km, and the voice once at ~600 m.
+  const routeCum = useMemo(() => (activeRoute ? cumulative(activeRoute.coords) : null), [activeRoute]);
+  const reportsOnRoute = useMemo(() => {
+    if (!activeRoute || !routeCum) return [];
+    return liveReports.flatMap((report) => {
+      const snap = snapToLine(report.coord, activeRoute.coords, routeCum);
+      return snap.offset < HAZARD_ON_ROUTE_M ? [{ report, along: snap.along }] : [];
+    });
+  }, [activeRoute, routeCum, liveReports]);
+  let hazardAhead: { report: HazardReport; distance: number } | null = null;
+  if (base === 'nav' && progress) {
+    for (const { report, along } of reportsOnRoute) {
+      const d = along - progress.covered;
+      if (d > 30 && d < HAZARD_SHOW_M && (!hazardAhead || d < hazardAhead.distance)) hazardAhead = { report, distance: d };
+    }
+  }
+  useEffect(() => {
+    if (!hazardAhead || muted || hazardAhead.distance > HAZARD_SPEAK_M) return;
+    const key = `hazard-${hazardAhead.report.id}`;
+    if (spoken.current.has(key)) return;
+    spoken.current.add(key);
+    // Queued behind any turn instruction instead of cutting it off.
+    speak(hazardPhrase(hazardAhead.report.type, hazardAhead.distance, lang), lang, { queue: true });
+  }, [hazardAhead, muted, lang]);
 
   const shareApp = async () => {
     const url = window.location.origin;
@@ -427,6 +521,7 @@ export default function App() {
         routes={base === 'nav' ? (activeRoute ? [activeRoute] : null) : base === 'route' ? routes : null}
         selectedRoute={base === 'nav' ? 0 : selected}
         destination={destination?.coord ?? null}
+        stop={shownStop?.coord ?? null}
         reports={liveReports}
         insets={INSETS[base] ?? NO_INSETS}
         recenterKey={recenterKey}
@@ -438,24 +533,26 @@ export default function App() {
         onLongPress={dropPin}
       />
 
-      {phase === 'app' && profile && (
+      {phase === 'app' && profile && !locationReady && <LocationScreen problem={geo.problem} onRetry={geo.retry} />}
+
+      {phase === 'app' && profile && locationReady && (
         <>
           {homeAlive && (
             <div className="home-layer" inert={base !== 'home'}>
             <HomeScreen
               profile={profile}
               position={realPos}
-              locationError={geo.error}
+              locationNote={locationNote}
               saved={saved}
               recents={recents}
               onSearch={() => {
-                setSearchForSaving(false);
+                setSearchPurpose('go');
                 go('search');
               }}
               onAccount={() => go('account')}
               onPick={openRoute}
               onAddSaved={() => {
-                setSearchForSaving(true);
+                setSearchPurpose('save');
                 go('search');
               }}
               onRecenter={() => {
@@ -472,8 +569,9 @@ export default function App() {
           {base === 'route' && destination && (
             <RouteSheet
               destination={destination}
-              originLabel={realPos ? 'your location' : 'KLCC (demo – location is off)'}
+              originLabel={realPos ? 'your location' : 'KK city centre (demo)'}
               savedAs={savedAs}
+              stop={stop}
               routes={routes}
               error={routeError}
               selected={selected}
@@ -481,9 +579,11 @@ export default function App() {
               onSelect={setSelected}
               onShowSteps={() => go('steps')}
               onStart={startTrip}
-              onRetry={() => fetchRoutes(origin, destination)}
+              onRetry={() => origin && fetchRoutes(origin, destination, stop)}
+              onAddStop={addStop}
+              onRemoveStop={removeStop}
               onSave={() => {
-                setSearchForSaving(false);
+                setSearchPurpose('go');
                 setPlaceToSave(destination);
                 go('save');
               }}
@@ -510,6 +610,8 @@ export default function App() {
               onDemoSpeed={() => setDemoSpeedIdx((i) => (i + 1) % DEMO_SPEEDS.length)}
               onShowSteps={() => go('steps')}
               onReport={() => go('report')}
+              hazardAhead={hazardAhead && { type: hazardAhead.report.type, distance: hazardAhead.distance }}
+              onSendEta={sendEta}
               onEnd={endTrip}
             />
           )}
@@ -519,7 +621,7 @@ export default function App() {
               position={realPos}
               recents={recents}
               saved={saved}
-              forSaving={searchForSaving}
+              purpose={searchPurpose}
               leaving={searchView.leaving ? leaveStyle : null}
               onPick={pickFromSearch}
               onBack={back}
