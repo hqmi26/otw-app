@@ -1,4 +1,5 @@
 import type { RouteStep } from './api';
+import type { HazardType } from './models';
 
 /** Language for turn instructions and the voice. */
 export type Lang = 'en' | 'ms';
@@ -21,6 +22,8 @@ function describeEn(step: StepLike): string {
       return step.road ? `Head out on ${step.road}` : 'Head out';
     case 'arrive':
       return 'You have arrived';
+    case 'stop':
+      return `Stop at ${step.road || 'your stop'}`;
     case 'merge':
       return `Merge${onto}`;
     case 'on ramp':
@@ -56,6 +59,8 @@ function describeMs(step: StepLike): string {
       return step.road ? `Mula di ${step.road}` : 'Mula perjalanan';
     case 'arrive':
       return 'Anda telah sampai';
+    case 'stop':
+      return `Berhenti di ${step.road || 'hentian anda'}`;
     case 'merge':
       return `Masuk${ke || ' ke laluan'}`;
     case 'on ramp':
@@ -108,6 +113,26 @@ export function spokenDistance(metres: number, lang: Lang): string {
 export function aheadPhrase(metres: number, step: StepLike, lang: Lang): string {
   const lead = lang === 'ms' ? 'Dalam' : 'In';
   return `${lead} ${spokenDistance(metres, lang)}, ${lowerFirst(instruction(step, lang))}`;
+}
+
+const HAZARD_NAMES: Record<HazardType, Record<Lang, string>> = {
+  accident: { en: 'Accident', ms: 'Kemalangan' },
+  jam: { en: 'Traffic jam', ms: 'Kesesakan' },
+  flood: { en: 'Flood', ms: 'Banjir' },
+  roadblock: { en: 'Roadblock', ms: 'Sekatan jalan' },
+  hazard: { en: 'Object on the road', ms: 'Objek di jalan' },
+  pothole: { en: 'Pothole', ms: 'Lubang jalan' },
+};
+
+export function hazardName(type: HazardType, lang: Lang): string {
+  return HAZARD_NAMES[type][lang];
+}
+
+/** Spoken when a report is on the road ahead: "Flood reported ahead, in 600 metres." */
+export function hazardPhrase(type: HazardType, metres: number, lang: Lang): string {
+  return lang === 'ms'
+    ? `${hazardName(type, lang)} dilaporkan di depan, dalam ${spokenDistance(metres, lang)}.`
+    : `${hazardName(type, lang)} reported ahead, in ${spokenDistance(metres, lang)}.`;
 }
 
 export const PHRASES: Record<'start' | 'arrived' | 'rerouted' | 'test', Record<Lang, string>> = {

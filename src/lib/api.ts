@@ -96,7 +96,7 @@ export interface RouteStep {
   modifier?: string;
   /** Roundabout exit number. */
   exit?: number;
-  /** Road name or number after the manoeuvre ('' if unnamed). */
+  /** Road name or number after the manoeuvre ('' if unnamed). For a 'stop', the stop's name. */
   road: string;
   location: LngLat;
   /** Metres from this manoeuvre to the next one. */
@@ -128,9 +128,18 @@ interface OsrmRoute {
   legs: { summary: string; steps: OsrmStep[] }[];
 }
 
-export async function getRoutes(from: LngLat, to: LngLat, signal?: AbortSignal): Promise<Route[]> {
+/** The main roads of the whole trip, e.g. "Jalan Lintas, Jalan Tuaran". */
+function mainRoads(legs: OsrmRoute['legs']): string {
+  const names = legs.flatMap((leg) => leg.summary.split(', ')).filter(Boolean);
+  return [...new Set(names)].slice(0, 2).join(', ');
+}
+
+/** Driving routes, best first. With a stop the route goes through it (and there's only one route). */
+export async function getRoutes(from: LngLat, to: LngLat, signal?: AbortSignal, stop?: Place | null): Promise<Route[]> {
+  const points = stop ? [from, stop.coord, to] : [from, to];
   const url =
-    `${OSRM_URL}${from[0]},${from[1]};${to[0]},${to[1]}` +
+    OSRM_URL +
+    points.map((c) => `${c[0]},${c[1]}`).join(';') +
     '?overview=full&geometries=geojson&alternatives=true&steps=true';
   const res = await fetch(url, { signal });
   if (!res.ok) throw new Error(`Routing failed (${res.status})`);
@@ -141,16 +150,20 @@ export async function getRoutes(from: LngLat, to: LngLat, signal?: AbortSignal):
     coords: r.geometry.coordinates,
     distance: r.distance,
     duration: r.duration,
-    via: r.legs[0]?.summary ?? '',
-    steps: r.legs.flatMap((leg) =>
-      leg.steps.map((s) => ({
-        type: s.maneuver.type,
-        modifier: s.maneuver.modifier,
-        exit: s.maneuver.exit,
-        road: s.name || s.ref || '',
-        location: s.maneuver.location,
-        distance: s.distance,
-      })),
+    via: mainRoads(r.legs),
+    steps: r.legs.flatMap((leg, legIndex) =>
+      leg.steps.map((s) => {
+        // Every leg but the last ends at the stop: "Stop at …", not "You have arrived".
+        const atStop = stop != null && legIndex < r.legs.length - 1 && s.maneuver.type === 'arrive';
+        return {
+          type: atStop ? 'stop' : s.maneuver.type,
+          modifier: s.maneuver.modifier,
+          exit: s.maneuver.exit,
+          road: atStop ? stop.name : s.name || s.ref || '',
+          location: s.maneuver.location,
+          distance: s.distance,
+        };
+      }),
     ),
   }));
 }

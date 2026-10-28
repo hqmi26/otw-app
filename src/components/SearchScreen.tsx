@@ -6,14 +6,22 @@ import { findPlaces } from '../lib/search';
 import { SavedIcon } from './brand';
 import { BackIcon, ClockIcon, PinIcon, PlusIcon, SearchIcon } from './icons';
 
+/** What the picked place is for: a trip, saving it (the "Add" chip), or a stop on the way. */
+export type SearchPurpose = 'go' | 'save' | 'stop';
+
+const PROMPTS: Record<SearchPurpose, string> = {
+  go: 'Search places or addresses',
+  save: 'Search the place to save',
+  stop: 'Search a stop on the way',
+};
+
 interface Props {
   position: LngLat | null;
   recents: Place[];
   saved: SavedPlace[];
   /** Places the user added themselves; searched first. */
   myPlaces: MyPlace[];
-  /** Picking a place to save (from the "Add" chip) rather than to drive to. */
-  forSaving: boolean;
+  purpose: SearchPurpose;
   leaving: 'pop' | 'fade' | null;
   onPick: (place: Place) => void;
   /** "Can't find it?" – put a missing place on the map. */
@@ -30,7 +38,7 @@ export default function SearchScreen({
   recents,
   saved,
   myPlaces,
-  forSaving,
+  purpose,
   leaving,
   onPick,
   onAddMissing,
@@ -110,8 +118,8 @@ export default function SearchScreen({
             ref={input}
             type="search"
             enterKeyHint="search"
-            placeholder={forSaving ? 'Search the place to save' : 'Search places or addresses'}
-            aria-label={forSaving ? 'Search the place to save' : 'Search places or addresses'}
+            placeholder={PROMPTS[purpose]}
+            aria-label={PROMPTS[purpose]}
             value={query}
             onChange={(e) => {
               setCategory(null);
@@ -162,7 +170,7 @@ export default function SearchScreen({
                   {distanceTo(place)}
                 </button>
               ))}
-              {status === 'done' && !forSaving && (
+              {status === 'done' && purpose === 'go' && (
                 <button type="button" className="row" onClick={onAddMissing}>
                   <span className="row-icon">
                     <PlusIcon size={20} />
@@ -177,7 +185,7 @@ export default function SearchScreen({
           </>
         ) : (
           <>
-            {!forSaving && saved.length > 0 && (
+            {purpose !== 'save' && saved.length > 0 && (
               <>
                 <h2 className="section-label">Saved places</h2>
                 <div className="list">

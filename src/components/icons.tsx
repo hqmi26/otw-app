@@ -215,6 +215,12 @@ export const ChatIcon = (p: IconProps) => (
   </Stroke>
 );
 
+export const CloseIcon = (p: IconProps) => (
+  <Stroke {...p}>
+    <path d="M6 6l12 12M18 6L6 18" />
+  </Stroke>
+);
+
 export const FlagIcon = (p: IconProps) => (
   <Stroke strokeWidth={2.4} {...p}>
     <path d="M5 21V4" />

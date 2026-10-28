@@ -17,9 +17,10 @@ import {
   WorkIcon,
 } from './icons';
 
-/** Arrow for a turn: rotated for left/right, a flag on arrival, a ring for roundabouts. */
+/** Arrow for a turn: rotated for left/right, a flag on arrival, a pin at a stop, a ring for roundabouts. */
 export function ManeuverIcon({ type, modifier, size = 44 }: { type: string; modifier?: string; size?: number }) {
   if (type === 'arrive') return <FlagIcon size={size} />;
+  if (type === 'stop') return <PinIcon size={size} />;
   if (type === 'roundabout' || type === 'rotary') return <RoundaboutIcon size={size} />;
   return <TurnArrowIcon size={size} style={{ transform: `rotate(${arrowRotation(modifier)}deg)` }} />;
 }

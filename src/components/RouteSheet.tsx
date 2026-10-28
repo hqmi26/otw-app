@@ -1,13 +1,15 @@
 import type { Place, Route } from '../lib/api';
 import { formatClock, formatDistance, formatDuration } from '../lib/geo';
 import { useSheetHeight } from '../hooks/useSheetHeight';
-import { BackIcon, NavArrowIcon, StarIcon } from './icons';
+import { BackIcon, CloseIcon, NavArrowIcon, PlusIcon, StarIcon } from './icons';
 
 interface Props {
   destination: Place;
   originLabel: string;
   /** Label the place is saved under, e.g. "Rumah Atuk". */
   savedAs: string | null;
+  /** A stop on the way, e.g. the school. */
+  stop: Place | null;
   routes: Route[] | null;
   error: string | null;
   selected: number;
@@ -18,6 +20,8 @@ interface Props {
   onRetry: () => void;
   onSave: () => void;
   onShowSteps: () => void;
+  onAddStop: () => void;
+  onRemoveStop: () => void;
   /** For a dropped pin: turn it into a named place search can find. */
   onAddMissing?: () => void;
   /** For a place the user added: take it off the map again. */
@@ -62,6 +66,24 @@ export default function RouteSheet(p: Props) {
         {p.onRemoveMine && (
           <button type="button" className="text-btn inline-link danger" onClick={p.onRemoveMine}>
             Remove this place
+          </button>
+        )}
+
+        {p.stop ? (
+          <div className="stop-row">
+            <span className="stop-dot" aria-hidden="true" />
+            <span className="row-text">
+              <span className="row-sub">Stop on the way</span>
+              <span className="row-title">{p.stop.name}</span>
+            </span>
+            <button type="button" className="icon-btn" onClick={p.onRemoveStop} aria-label={`Remove the stop at ${p.stop.name}`}>
+              <CloseIcon size={20} />
+            </button>
+          </div>
+        ) : (
+          <button type="button" className="text-btn add-stop" onClick={p.onAddStop}>
+            <PlusIcon size={18} />
+            Add a stop
           </button>
         )}
 

@@ -27,8 +27,8 @@ const ROUTE_COLORS: Record<Theme, { route: string; casing: string; alt: string }
   dark: { route: '#34D1B2', casing: '#08100D', alt: '#7E8C87' },
 };
 
-/** Kuala Lumpur, shown before we know where the user is. */
-export const DEFAULT_CENTER: LngLat = [101.6869, 3.139];
+/** Kota Kinabalu, shown for the moment before the phone's location comes in. */
+export const DEFAULT_CENTER: LngLat = [116.0762, 5.9836];
 
 const SOURCE = 'otw-routes';
 const CASING_LAYER = 'otw-route-casing';
@@ -55,6 +55,8 @@ interface Props {
   routes: Route[] | null;
   selectedRoute: number;
   destination: LngLat | null;
+  /** A stop on the way to the destination. */
+  stop: LngLat | null;
   reports: HazardReport[];
   /** Space covered by the UI at the top and bottom, so the map centres in what's visible. */
   insets: { top: number; bottom: number };
@@ -245,12 +247,21 @@ function makeDestinationMarker(): HTMLElement {
   return el;
 }
 
+function makeStopMarker(): HTMLElement {
+  const el = document.createElement('div');
+  el.className = 'stop-marker';
+  el.setAttribute('role', 'img');
+  el.setAttribute('aria-label', 'Stop on the way');
+  return el;
+}
+
 export default function MapView(props: Props) {
   const container = useRef<HTMLDivElement>(null);
   const pickPin = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const userMarker = useRef<Marker | null>(null);
   const destMarker = useRef<Marker | null>(null);
+  const stopMarker = useRef<Marker | null>(null);
   const reportMarkers = useRef(new Map<string, Marker>());
   const latest = useRef(props);
   latest.current = props;
@@ -358,6 +369,7 @@ export default function MapView(props: Props) {
       mapRef.current = null;
       userMarker.current = null;
       destMarker.current = null;
+      stopMarker.current = null;
       reportMarkers.current.clear();
     };
   }, []);
@@ -471,6 +483,19 @@ export default function MapView(props: Props) {
     destMarker.current.setLngLat(props.destination).addTo(map);
   }, [props.destination]);
 
+  // Stop on the way.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    if (!props.stop) {
+      stopMarker.current?.remove();
+      stopMarker.current = null;
+      return;
+    }
+    if (!stopMarker.current) stopMarker.current = new Marker({ element: makeStopMarker() });
+    stopMarker.current.setLngLat(props.stop).addTo(map);
+  }, [props.stop]);
+
   // Hazard report pins.
   useEffect(() => {
     const map = mapRef.current;
@@ -520,7 +545,7 @@ export default function MapView(props: Props) {
     });
   }, [props.mode, props.position, props.heading, props.follow, props.insets.top, props.insets.bottom]);
 
-  // Back on the main map after a trip: flatten it and return to the user (or KL).
+  // Back on the main map after a trip: flatten it and return to the user.
   const prevMode = useRef(props.mode);
   useEffect(() => {
     const map = mapRef.current;
