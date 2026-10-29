@@ -109,9 +109,9 @@ function addRouteLayers(map: MapLibreMap, theme: Theme) {
   map.addSource(SOURCE, {
     type: 'geojson',
     data: routeData(null, 0, 'browse'),
-    // The FOSSGIS route server asks for this credit and a "fix the map" link.
+    // The FOSSGIS route server asks for this credit, a "fix the map" link and a contact email.
     attribution:
-      'Routes <a href="https://valhalla1.openstreetmap.de" target="_blank">FOSSGIS Valhalla</a>, <a href="https://project-osrm.org" target="_blank">OSRM</a> · <a href="https://www.openstreetmap.org/fixthemap" target="_blank">Fix the map</a>',
+      'Routes <a href="https://valhalla1.openstreetmap.de" target="_blank">FOSSGIS Valhalla</a>, <a href="https://project-osrm.org" target="_blank">OSRM</a> · <a href="https://www.openstreetmap.org/fixthemap" target="_blank">Fix the map</a> · Contact <a href="mailto:otwapp.malaysia@gmail.com">otwapp.malaysia@gmail.com</a>',
   });
   map.addLayer(
     {
