@@ -19,7 +19,8 @@ interface Props {
 }
 
 function maskPhone(digits: string) {
-  return `+60 ••• •••• ${digits.slice(-4)}`;
+  // Family who joined from an invite link only gave a name.
+  return digits ? `+60 ••• •••• ${digits.slice(-4)}` : 'Joined with a family invite';
 }
 
 /** Account (design screen 7). */
