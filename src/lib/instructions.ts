@@ -179,10 +179,11 @@ export function hazardPhrase(type: HazardType, metres: number, lang: Lang): stri
     : `${hazardName(type, lang)} reported ahead, in ${spokenDistance(metres, lang)}.`;
 }
 
-export const PHRASES: Record<'start' | 'arrived' | 'rerouted' | 'test', Record<Lang, string>> = {
+export const PHRASES: Record<'start' | 'arrived' | 'rerouted' | 'stopAdded' | 'test', Record<Lang, string>> = {
   start: { en: 'Jom! Let’s go.', ms: 'Jom! Kita gerak.' },
   arrived: { en: 'You have arrived. Dah sampai!', ms: 'Dah sampai! Anda telah tiba.' },
   rerouted: { en: 'Route updated.', ms: 'Laluan dikemas kini.' },
+  stopAdded: { en: 'Stop added. Route updated.', ms: 'Hentian ditambah. Laluan dikemas kini.' },
   test: {
     en: 'In 300 metres, turn left onto Jalan Ampang.',
     ms: 'Dalam 300 meter, belok kiri ke Jalan Ampang.',

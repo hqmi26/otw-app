@@ -5,7 +5,7 @@ import type { HazardType } from '../lib/models';
 import type { Progress } from '../hooks/useNavigation';
 import { useSheetHeight } from '../hooks/useSheetHeight';
 import { HazardIcon, ManeuverIcon } from './brand';
-import { AlertIcon, ChatIcon, MutedIcon, NavArrowIcon, RouteIcon, SoundIcon, UsersIcon } from './icons';
+import { AlertIcon, ChatIcon, MutedIcon, NavArrowIcon, PlusIcon, RouteIcon, SoundIcon, UsersIcon } from './icons';
 
 interface Props {
   route: Route;
@@ -31,6 +31,8 @@ interface Props {
   onDemoSpeed: () => void;
   onShowSteps: () => void;
   onReport: () => void;
+  /** Petrol, surau or food on the way, or any place: the route then goes through it. */
+  onAddStop: () => void;
   /** Opens WhatsApp with "OTW to …, arriving around …" ready to send. */
   onSendEta: (secondsLeft: number) => void;
   onEnd: () => void;
@@ -131,10 +133,21 @@ export default function NavigationView(p: Props) {
             End
           </button>
         </div>
-        <button type="button" className="secondary-btn" onClick={() => p.onSendEta(remainingTime)}>
-          <ChatIcon size={20} />
-          {p.lang === 'ms' ? 'Hantar ETA di WhatsApp' : 'Send ETA on WhatsApp'}
-        </button>
+        <div className="nav-actions">
+          <button type="button" className="secondary-btn" onClick={p.onAddStop}>
+            <PlusIcon size={20} />
+            {p.lang === 'ms' ? 'Tambah hentian' : 'Add a stop'}
+          </button>
+          <button
+            type="button"
+            className="secondary-btn"
+            onClick={() => p.onSendEta(remainingTime)}
+            aria-label={p.lang === 'ms' ? 'Hantar ETA di WhatsApp' : 'Send ETA on WhatsApp'}
+          >
+            <ChatIcon size={20} />
+            {p.lang === 'ms' ? 'Hantar ETA' : 'Send ETA'}
+          </button>
+        </div>
       </section>
 
       {p.progress?.arrived && (

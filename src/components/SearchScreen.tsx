@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { CATEGORIES, type Place } from '../lib/api';
 import { distance, formatDistance, type LngLat } from '../lib/geo';
 import type { MyPlace, SavedPlace } from '../lib/models';
+import type { RouteAhead } from '../lib/places';
 import { findPlaces } from '../lib/search';
 import { SavedIcon } from './brand';
 import { BackIcon, ClockIcon, PinIcon, PlusIcon, SearchIcon } from './icons';
@@ -22,6 +23,8 @@ interface Props {
   /** Places the user added themselves; searched first. */
   myPlaces: MyPlace[];
   purpose: SearchPurpose;
+  /** When adding a stop: the road still ahead, so the chips show places on the way. */
+  route?: RouteAhead | null;
   leaving: 'pop' | 'fade' | null;
   onPick: (place: Place) => void;
   /** "Can't find it?" – put a missing place on the map. */
@@ -29,7 +32,7 @@ interface Props {
   onBack: () => void;
 }
 
-type Status = 'idle' | 'loading' | 'done' | 'error';
+type Status = 'idle' | 'loading' | 'done' | 'error' | 'busy';
 type Category = (typeof CATEGORIES)[number];
 
 /** Search (design screen 2). */
@@ -39,6 +42,7 @@ export default function SearchScreen({
   saved,
   myPlaces,
   purpose,
+  route = null,
   leaving,
   onPick,
   onAddMissing,
@@ -52,6 +56,8 @@ export default function SearchScreen({
   near.current = position;
   const mine = useRef(myPlaces);
   mine.current = myPlaces;
+  const ahead = useRef(route);
+  ahead.current = route;
   const input = useRef<HTMLInputElement>(null);
 
   // Let the slide-in finish before the keyboard opens; doing both at once
@@ -88,6 +94,7 @@ export default function SearchScreen({
           category,
           near: near.current,
           mine: mine.current,
+          route: ahead.current,
           signal: ctrl.signal,
           onFirst: (list) => {
             if (!ctrl.signal.aborted) setResults(list);
@@ -98,7 +105,8 @@ export default function SearchScreen({
             setStatus('done');
           })
           .catch((e: unknown) => {
-            if ((e as Error).name !== 'AbortError') setStatus('error');
+            const name = (e as Error).name;
+            if (name !== 'AbortError') setStatus(name === 'BusyError' ? 'busy' : 'error');
           });
       },
       // Sabah is searched on the phone, so a short pause is enough.
@@ -158,13 +166,22 @@ export default function SearchScreen({
       <div className="search-body">
         {searching ? (
           <>
-            <h2 className="section-label">{category ? `${category.label} near you` : 'Results'}</h2>
+            <h2 className="section-label">
+              {category ? `${category.label} ${route ? 'on the way' : 'near you'}` : 'Results'}
+            </h2>
             {status === 'loading' && results.length === 0 && <p className="hint">Searching…</p>}
             {status === 'error' && (
               <p className="hint">Search isn’t working right now. Check your internet and try again.</p>
             )}
+            {status === 'busy' && (
+              <p className="hint">Search outside Sabah is busy right now. Try again in a minute.</p>
+            )}
             {status === 'done' && results.length === 0 && (
-              <p className="hint">Nothing found. Try a shorter name or add the town.</p>
+              <p className="hint">
+                {category && route
+                  ? `No ${category.label.toLowerCase()} found on the way. Try searching by name.`
+                  : 'Nothing found. Try a shorter name or add the town.'}
+              </p>
             )}
             <div className="list" aria-live="polite">
               {results.map((place) => (
@@ -176,7 +193,8 @@ export default function SearchScreen({
                     <span className="row-title">{place.name}</span>
                     {place.subtitle && <span className="row-sub">{place.subtitle}</span>}
                   </span>
-                  {distanceTo(place)}
+                  {/* On the way, the subtitle already says how far ahead. */}
+                  {!(category && route) && distanceTo(place)}
                 </button>
               ))}
               {status === 'done' && purpose === 'go' && (

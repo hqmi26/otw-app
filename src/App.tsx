@@ -18,7 +18,7 @@ import FeedbackSheet from './components/FeedbackSheet';
 import AddPlaceSheet from './components/AddPlaceSheet';
 import { CheckIcon } from './components/icons';
 import { getRoutes, type Place, type Route } from './lib/api';
-import { loadPlaces, type PlaceGroup, type PlacesIndex } from './lib/places';
+import { loadPlaces, type PlaceGroup, type PlacesIndex, type RouteAhead } from './lib/places';
 import { whatIsHere } from './lib/search';
 import {
   bearing,
@@ -136,7 +136,9 @@ export default function App() {
   stackRef.current = stack;
   const lastMove = useRef<'push' | 'pop'>('push');
   const top = stack[stack.length - 1];
-  const base = [...stack].reverse().find((s) => !MODALS.includes(s)) ?? 'home';
+  // Searching for a stop while driving keeps the trip going underneath (voice, GPS, the map).
+  const base =
+    [...stack].reverse().find((s) => !MODALS.includes(s) && !(s === 'search' && stack.includes('nav'))) ?? 'home';
 
   useEffect(() => {
     // An invite link (/join/CODE) has been read; the app itself lives at /.
@@ -244,7 +246,9 @@ export default function App() {
         setRouteError(
           e.message === 'No route found'
             ? 'No driving route found to this place.'
-            : 'Couldn’t get directions. Check your internet and try again.',
+            : e.name === 'BusyError'
+              ? 'The route services are busy right now. Try again in a minute.'
+              : 'Couldn’t get directions. Check your internet and try again.',
         );
       });
   }, []);
@@ -287,7 +291,8 @@ export default function App() {
       setPlaceToSave(place);
       go('save');
     } else if (searchPurpose === 'stop') {
-      if (origin && destination) {
+      if (stack.includes('nav')) addStopWhileDriving(place);
+      else if (origin && destination) {
         setStop(place);
         fetchRoutes(origin, destination, place);
       }
@@ -526,6 +531,27 @@ export default function App() {
       .finally(() => setRerouting(false));
   }, [base, simulate, progress, destination, shownStop, realPos, rerouting, muted, lang]);
 
+  // "Add a stop" while driving: a new route from here through the stop. If it
+  // can't be found, the trip carries on as it was.
+  const addStopWhileDriving = (place: Place) => {
+    const from = shownNavPos ?? origin;
+    if (!from || !destination) return;
+    setRerouting(true);
+    lastReroute.current = Date.now();
+    getRoutes(from, destination.coord, undefined, place, false)
+      .then((list) => {
+        spoken.current.clear();
+        pace.current = null;
+        setStop(place);
+        setActiveRoute(list[0]);
+        if (!muted) speak(PHRASES.stopAdded[lang], lang);
+      })
+      .catch((e: Error) => {
+        showToast(e.name === 'BusyError' ? 'Routes are busy. Try the stop again in a minute' : 'Couldn’t add that stop');
+      })
+      .finally(() => setRerouting(false));
+  };
+
   // Keep the screen on while driving (also asked for in the Start tap, for iPhones).
   useEffect(() => {
     if (base !== 'nav') return;
@@ -636,7 +662,7 @@ export default function App() {
 
   // --- Leaving animations for full-screen pages ---
   const leaveStyle = lastMove.current === 'pop' ? 'pop' : 'fade';
-  const searchView = usePresence(phase === 'app' && base === 'search');
+  const searchView = usePresence(phase === 'app' && (base === 'search' || top === 'search'));
   const accountView = usePresence(phase === 'app' && base === 'account');
   const privacyView = usePresence(phase === 'app' && base === 'privacy');
   const familyView = usePresence(phase === 'app' && base === 'family');
@@ -645,6 +671,18 @@ export default function App() {
   const stepsRoute = base === 'nav' ? activeRoute : (routes?.[selected] ?? null);
   const stepsView = usePresence(phase === 'app' && top === 'steps' && stepsRoute != null, 250);
   const feedbackView = usePresence(phase === 'app' && top === 'feedback', 250);
+
+  // Adding a stop: the search chips look along the road still ahead ("Petrol on the way").
+  const previewRoute = routes?.[selected] ?? null;
+  const previewCum = useMemo(() => (previewRoute ? cumulative(previewRoute.coords) : null), [previewRoute]);
+  const stopRoute: RouteAhead | null =
+    searchPurpose !== 'stop'
+      ? null
+      : stack.includes('nav') && activeRoute && routeCum
+        ? { coords: activeRoute.coords, cum: routeCum, from: progress?.covered ?? 0 }
+        : previewRoute && previewCum
+          ? { coords: previewRoute.coords, cum: previewCum, from: 0 }
+          : null;
 
   const mapMode: MapMode =
     base === 'nav' ? 'nav' : base === 'route' ? 'preview' : base === 'addplace' ? 'pick' : 'browse';
@@ -778,6 +816,7 @@ export default function App() {
               onReport={() => go('report')}
               hazardAhead={hazardAhead && { type: hazardAhead.report.type, distance: hazardAhead.distance }}
               sharingLive={canShare && shareLive}
+              onAddStop={addStop}
               onSendEta={sendEta}
               onEnd={endTrip}
             />
@@ -790,6 +829,7 @@ export default function App() {
               saved={saved}
               myPlaces={myPlaces}
               purpose={searchPurpose}
+              route={stopRoute}
               leaving={searchView.leaving ? leaveStyle : null}
               onPick={pickFromSearch}
               onAddMissing={() => openAddPlace(realPos)}

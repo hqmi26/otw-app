@@ -1,7 +1,18 @@
 import { reverseGeocode, searchPlaces, CATEGORIES, type Place } from './api';
 import { distance, type LngLat } from './geo';
 import { myPlaceToPlace, type MyPlace } from './models';
-import { covers, dedupe, loadPlaces, nearbyInGroup, placeAt, scoreName, searchIndex, type Hit } from './places';
+import {
+  alongRoute,
+  covers,
+  dedupe,
+  loadPlaces,
+  nearbyInGroup,
+  placeAt,
+  scoreName,
+  searchIndex,
+  type Hit,
+  type RouteAhead,
+} from './places';
 
 type Category = (typeof CATEGORIES)[number];
 
@@ -13,6 +24,8 @@ interface FindArgs {
   signal: AbortSignal;
   /** Gets the Sabah results straight away, while other states are still being asked. */
   onFirst?: (places: Place[]) => void;
+  /** Adding a stop: the chips find places along the road still ahead instead of near you. */
+  route?: RouteAhead | null;
 }
 
 /** Sabah results further than this come after places in other states ("Mid Valley" is in KL, not Tawau). */
@@ -40,10 +53,13 @@ function searchMine({ query, category, near, mine }: FindArgs): Hit[] {
  * asked too, for the rest of Malaysia. Places the user added come first.
  */
 export async function findPlaces(args: FindArgs): Promise<Place[]> {
-  const { query, category, near, signal } = args;
+  const { query, category, near, signal, route } = args;
   const mine = searchMine(args);
   const ix = await loadPlaces();
   abortIfStale(signal);
+
+  // "Petrol on the way": in the order you'll pass them (Sabah's list only).
+  if (category && route && ix) return alongRoute(ix, category.group, route).map((h) => h.place);
 
   const local = ix != null && (near == null || covers(ix, near));
   const first = local

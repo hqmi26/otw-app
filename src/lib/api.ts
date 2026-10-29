@@ -1,4 +1,5 @@
 import type { LngLat } from './geo';
+import { ask, shortMemory } from './net';
 import type { PlaceGroup } from './places';
 
 /*
@@ -8,7 +9,7 @@ import type { PlaceGroup } from './places';
  *    the OSRM demo server finds only one in KK. OSRM stays as the backup.
  * All are fine for family testing (Valhalla allows one request a second). For a
  * public launch, self-host them on a server in Malaysia (see README) so nobody's
- * location leaves the country.
+ * location leaves the country. net.ts keeps a rush of users from hanging on them.
  */
 const PHOTON_URL = 'https://photon.komoot.io/api/';
 const VALHALLA_URL = 'https://valhalla1.openstreetmap.de/route';
@@ -45,6 +46,9 @@ export const CATEGORIES: readonly { label: string; query: string; osmTag: string
   { label: 'Parking', query: 'parking', osmTag: 'amenity:parking', group: 'parking' },
 ];
 
+/** The same search again (typing back over a word, reopening search) isn't asked twice. */
+const searchMemory = shortMemory<Place[]>(5 * 60_000);
+
 export async function searchPlaces(
   query: string,
   near: LngLat | null,
@@ -57,7 +61,11 @@ export async function searchPlaces(
     params.set('lon', near[0].toFixed(4));
     params.set('lat', near[1].toFixed(4));
   }
-  const res = await fetch(`${PHOTON_URL}?${params}`, { signal });
+  // Nearby ranking only needs roughly where you are, so ~1 km apart counts as the same search.
+  const memoryKey = `${query.trim().toLowerCase()}|${osmTag ?? ''}|${near ? near.map((v) => v.toFixed(2)).join(',') : ''}`;
+  const remembered = searchMemory.get(memoryKey);
+  if (remembered) return remembered;
+  const res = await ask('photon', `${PHOTON_URL}?${params}`, { signal, timeoutMs: 6000 });
   if (!res.ok) throw new Error(`Search failed (${res.status})`);
   const data = (await res.json()) as { features: PhotonFeature[] };
 
@@ -71,6 +79,7 @@ export async function searchPlaces(
     seen.add(key);
     places.push(place);
   }
+  searchMemory.set(memoryKey, places);
   return places;
 }
 
@@ -86,7 +95,7 @@ function toPlace(f: PhotonFeature, fallbackId: number): Place | null {
 /** What's at a spot on the map (for long-press pins): nearest named place or street. */
 export async function reverseGeocode(coord: LngLat, signal?: AbortSignal): Promise<{ name: string; subtitle: string } | null> {
   const params = new URLSearchParams({ lon: coord[0].toFixed(6), lat: coord[1].toFixed(6), limit: '1' });
-  const res = await fetch(`${PHOTON_URL.replace('/api/', '/reverse')}?${params}`, { signal });
+  const res = await ask('photon', `${PHOTON_URL.replace('/api/', '/reverse')}?${params}`, { signal, timeoutMs: 6000 });
   if (!res.ok) return null;
   const data = (await res.json()) as { features: PhotonFeature[] };
   const place = data.features[0] ? toPlace(data.features[0], 0) : null;
@@ -149,7 +158,7 @@ async function valhalla(points: LngLat[], choices: boolean, signal?: AbortSignal
     shape_format: 'geojson',
   });
   // A GET with the request in the address needs no CORS preflight.
-  const res = await fetch(`${VALHALLA_URL}?${new URLSearchParams({ json })}`, { signal });
+  const res = await ask('valhalla', `${VALHALLA_URL}?${new URLSearchParams({ json })}`, { signal, timeoutMs: 8000 });
   const data = (await res.json()) as OsrmAnswer;
   if (res.status === 400 && (data.code === 'NoRoute' || data.code === 'NoSegment')) throw new Error('No route found');
   if (!res.ok) throw new Error(`Routing failed (${res.status})`);
@@ -161,10 +170,14 @@ async function osrm(points: LngLat[], signal?: AbortSignal): Promise<OsrmAnswer>
     OSRM_URL +
     points.map((c) => `${c[0]},${c[1]}`).join(';') +
     '?overview=full&geometries=geojson&alternatives=true&steps=true';
-  const res = await fetch(url, { signal });
+  const res = await ask('osrm', url, { signal, timeoutMs: 10_000 });
   if (!res.ok) throw new Error(`Routing failed (${res.status})`);
   return (await res.json()) as OsrmAnswer;
 }
+
+/** Opening the same trip again within a minute (back, then forward) reuses the routes. */
+const routeMemory = shortMemory<Route[]>(60_000, 10);
+const spot = (c: LngLat) => `${c[0].toFixed(4)},${c[1].toFixed(4)}`; // ~10 m
 
 /**
  * Driving routes, best first: up to three to choose from. With a stop the route
@@ -179,23 +192,28 @@ export async function getRoutes(
   choices = true,
 ): Promise<Route[]> {
   const points = stop ? [from, stop.coord, to] : [from, to];
+  const memoryKey = points.map(spot).join(';') + (choices ? '+' : '');
+  const remembered = routeMemory.get(memoryKey);
+  if (remembered) return remembered;
   let data: OsrmAnswer;
   try {
     data = await valhalla(points, choices && !stop, signal);
   } catch (e) {
     const err = e as Error;
     if (err.name === 'AbortError' || err.message === 'No route found') throw err;
-    data = await osrm(points, signal); // Valhalla is down or busy
+    data = await osrm(points, signal); // Valhalla is down or busy; if OSRM is too, that's a BusyError
   }
   if (data.code !== 'Ok' || !data.routes?.length) throw new Error('No route found');
 
-  return data.routes.slice(0, 3).map((r) => ({
+  const routes = data.routes.slice(0, 3).map((r) => ({
     coords: r.geometry.coordinates,
     distance: r.distance,
     duration: r.duration,
     via: mainRoads(r.legs),
     steps: toSteps(r, stop),
   }));
+  routeMemory.set(memoryKey, routes);
+  return routes;
 }
 
 function toSteps(r: OsrmRoute, stop?: Place | null): RouteStep[] {

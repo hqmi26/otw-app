@@ -1,6 +1,6 @@
 import type { FeatureCollection, MultiPolygon, Point, Polygon } from 'geojson';
 import type { Place } from './api';
-import { distance, type LngLat } from './geo';
+import { distance, formatDistance, snapToLine, type LngLat } from './geo';
 
 /*
  * Sabah's places, searched on the phone itself. public/places/sabah.json is
@@ -407,6 +407,58 @@ export function nearbyInGroup(ix: PlacesIndex, group: PlaceGroup, near: LngLat |
     .sort((a, b) => a.d - b.d)
     .slice(0, limit)
     .map(({ i, d }) => ({ place: toPlace(ix, i), score: -d }));
+}
+
+/** The part of a route still ahead, for "Petrol on the way". */
+export interface RouteAhead {
+  coords: LngLat[];
+  /** cumulative() of coords. */
+  cum: number[];
+  /** Metres of the route already driven (0 before the trip starts). */
+  from: number;
+}
+
+/** A place this far from the road counts as on the way (a short turn off). */
+const ON_THE_WAY_M = 300;
+/** Closer than this, two places of the same kind are taken to be one. */
+const SAME_PLACE_M = 80;
+
+/**
+ * Places of one kind along the road still ahead, in the order you reach them,
+ * e.g. the petrol stations on the way. The subtitle says how far ahead.
+ */
+export function alongRoute(ix: PlacesIndex, group: PlaceGroup, route: RouteAhead, limit = 10): Hit[] {
+  // A quick box around the route first, so only nearby places are measured properly.
+  let [west, south, east, north] = [Infinity, Infinity, -Infinity, -Infinity];
+  for (const [x, y] of route.coords) {
+    west = Math.min(west, x);
+    east = Math.max(east, x);
+    south = Math.min(south, y);
+    north = Math.max(north, y);
+  }
+  const pad = 0.004; // ~400 m
+  const found: { i: number; along: number; p: LngLat }[] = [];
+  for (const i of ix.byGroup.get(group) ?? []) {
+    const [, , x, y] = ix.file.places[i];
+    const p: LngLat = [x / 1e5, y / 1e5];
+    if (p[0] < west - pad || p[0] > east + pad || p[1] < south - pad || p[1] > north + pad) continue;
+    const snap = snapToLine(p, route.coords, route.cum);
+    if (snap.offset <= ON_THE_WAY_M && snap.along > route.from + 50) found.push({ i, along: snap.along, p });
+  }
+  // One place can be listed several times under different names (the floating
+  // mosque has six); keep the one the list is surest of (lowest index).
+  const kept: typeof found = [];
+  for (const f of found.sort((a, b) => a.i - b.i)) {
+    if (!kept.some((k) => distance(k.p, f.p) < SAME_PLACE_M)) kept.push(f);
+  }
+  return kept
+    .sort((a, b) => a.along - b.along)
+    .slice(0, limit)
+    .map(({ i, along }) => {
+      const place = toPlace(ix, i);
+      const ahead = `${formatDistance(along - route.from)} ahead`;
+      return { place: { ...place, subtitle: place.subtitle ? `${ahead} · ${place.subtitle}` : ahead }, score: -along };
+    });
 }
 
 /** What's at a spot on the map: a place within ~40 m, else a street within ~120 m. */

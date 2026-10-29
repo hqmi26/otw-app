@@ -1691,6 +1691,12 @@ textarea.input {
   white-space: normal;
 }
 
+.nav-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
 .privacy-points {
   margin: 0;
   padding-left: 20px;
