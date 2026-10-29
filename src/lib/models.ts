@@ -26,7 +26,7 @@ export const SAVED_PRESETS: { label: string; kind: SavedKind }[] = [
   { label: 'Office', kind: 'work' },
 ];
 
-export type HazardType = 'accident' | 'jam' | 'flood' | 'roadblock' | 'hazard' | 'pothole';
+export type HazardType = 'accident' | 'jam' | 'flood' | 'roadblock' | 'hazard' | 'pothole' | 'camera';
 
 export const HAZARDS: { type: HazardType; label: string }[] = [
   { type: 'accident', label: 'Accident' },
@@ -35,6 +35,7 @@ export const HAZARDS: { type: HazardType; label: string }[] = [
   { type: 'roadblock', label: 'Roadblock' },
   { type: 'hazard', label: 'Object on road' },
   { type: 'pothole', label: 'Pothole' },
+  { type: 'camera', label: 'Speed camera' },
 ];
 
 export interface HazardReport {
@@ -48,6 +49,12 @@ export interface HazardReport {
 
 /** Reports disappear after this long. */
 export const REPORT_LIFETIME_MS = 2 * 60 * 60 * 1000;
+/** Speed cameras stay put, so they're kept much longer. */
+export const CAMERA_LIFETIME_MS = 30 * 24 * 60 * 60 * 1000;
+
+export function reportLifetime(type: HazardType): number {
+  return type === 'camera' ? CAMERA_LIFETIME_MS : REPORT_LIFETIME_MS;
+}
 
 export function initials(name: string): string {
   const letters = name

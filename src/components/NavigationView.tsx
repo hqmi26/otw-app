@@ -1,11 +1,11 @@
 import type { Place, Route } from '../lib/api';
 import { formatClock, formatDistance, formatDuration } from '../lib/geo';
-import { hazardName, instruction, thenText, type Lang } from '../lib/instructions';
+import { hazardName, instruction, nextAction, thenText, type Lang } from '../lib/instructions';
 import type { HazardType } from '../lib/models';
 import type { Progress } from '../hooks/useNavigation';
 import { useSheetHeight } from '../hooks/useSheetHeight';
 import { HazardIcon, ManeuverIcon } from './brand';
-import { AlertIcon, ChatIcon, MutedIcon, NavArrowIcon, SoundIcon, UsersIcon } from './icons';
+import { AlertIcon, ChatIcon, MutedIcon, NavArrowIcon, RouteIcon, SoundIcon, UsersIcon } from './icons';
 
 interface Props {
   route: Route;
@@ -25,6 +25,8 @@ interface Props {
   /** Family can see the car move (Share live trip is on). */
   sharingLive: boolean;
   onRecenter: () => void;
+  /** Zoom out to the rest of the route; it comes back to the car by itself. */
+  onOverview: () => void;
   onToggleMute: () => void;
   onDemoSpeed: () => void;
   onShowSteps: () => void;
@@ -36,8 +38,11 @@ interface Props {
 
 export default function NavigationView(p: Props) {
   const sheet = useSheetHeight<HTMLElement>();
-  const step = p.progress ? p.route.steps[p.progress.stepIndex] : p.route.steps[0];
-  const then = p.progress ? p.route.steps[p.progress.stepIndex + 1] : undefined;
+  // The card shows the next thing to do, like the voice: "carry on" steps are skipped.
+  const steps = p.route.steps;
+  const next = p.progress ? nextAction(steps, p.progress.stepIndex, p.progress.toManeuver) : null;
+  const step = next ? steps[next.index] : steps[0];
+  const then = next && next.index + 1 < steps.length ? steps[nextAction(steps, next.index + 1, 0).index] : undefined;
   const remainingTime = p.remainingTime ?? p.route.duration;
   const remaining = p.progress?.remaining ?? p.route.distance;
 
@@ -52,9 +57,7 @@ export default function NavigationView(p: Props) {
         <span className="nav-main">
           <ManeuverIcon type={step.type} modifier={step.modifier} />
           <span className="nav-text" role="status" aria-live="polite">
-            {p.progress && step.type !== 'arrive' && (
-              <span className="nav-dist">{formatDistance(p.progress.toManeuver)}</span>
-            )}
+            {next && step.type !== 'arrive' && <span className="nav-dist">{formatDistance(next.distance)}</span>}
             <span className="nav-instruction">{instruction(step, p.lang)}</span>
           </span>
         </span>
@@ -87,6 +90,14 @@ export default function NavigationView(p: Props) {
       </div>
 
       <div className="fab-stack fab-nav">
+        <button
+          type="button"
+          className="round-btn"
+          onClick={p.onOverview}
+          aria-label={p.lang === 'ms' ? 'Tunjuk seluruh laluan' : 'Show the whole route'}
+        >
+          <RouteIcon />
+        </button>
         <button
           type="button"
           className="round-btn"

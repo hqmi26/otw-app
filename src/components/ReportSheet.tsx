@@ -58,7 +58,7 @@ export default function ReportSheet({ hasLocation, leaving, onSend, onClose }: P
 
         <p className="privacy-note">
           <LockIcon size={18} />
-          Saved on this phone for now · clears after 2 hours
+          Saved on this phone for now · {type === 'camera' ? 'kept for 30 days' : 'clears after 2 hours'}
         </p>
 
         <button type="button" className="report-send" disabled={!hasLocation} onClick={() => onSend(type, note.trim())}>

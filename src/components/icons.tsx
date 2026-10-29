@@ -202,6 +202,21 @@ export const PotholeIcon = (p: IconProps) => (
   </Stroke>
 );
 
+export const ChartIcon = (p: IconProps) => (
+  <Stroke {...p}>
+    <path d="M4 20h16" />
+    <path d="M7 16v-4M12 16V7M17 16v-6" />
+  </Stroke>
+);
+
+export const CameraIcon = (p: IconProps) => (
+  <Stroke {...p}>
+    <rect x="2.5" y="7" width="13" height="10" rx="2" />
+    <circle cx="9" cy="12" r="2.5" />
+    <path d="M15.5 10.5l6-2.5v8l-6-2.5" />
+  </Stroke>
+);
+
 export const CheckIcon = (p: IconProps) => (
   <Stroke strokeWidth={2.6} {...p}>
     <path d="M5 12l5 5L20 7" />
@@ -218,6 +233,15 @@ export const ChatIcon = (p: IconProps) => (
 export const CloseIcon = (p: IconProps) => (
   <Stroke {...p}>
     <path d="M6 6l12 12M18 6L6 18" />
+  </Stroke>
+);
+
+/** A winding route from a dot to a pin: "show the whole route". */
+export const RouteIcon = (p: IconProps) => (
+  <Stroke {...p}>
+    <circle cx="6" cy="19" r="2" />
+    <path d="M8 19h7.5a3.5 3.5 0 0 0 0-7h-7a3.5 3.5 0 0 1 0-7H15" />
+    <path d="M18 8.5s3-2.6 3-4.75a3 3 0 0 0-6 0C15 5.9 18 8.5 18 8.5z" />
   </Stroke>
 );
 

@@ -10,6 +10,7 @@ import NavigationView from './components/NavigationView';
 import LocationScreen from './components/LocationScreen';
 import AccountScreen from './components/AccountScreen';
 import FamilyScreen from './components/FamilyScreen';
+import PrivacyScreen from './components/PrivacyScreen';
 import ReportSheet from './components/ReportSheet';
 import SavePlaceSheet from './components/SavePlaceSheet';
 import StepsSheet from './components/StepsSheet';
@@ -25,12 +26,12 @@ import {
   snapToLine,
   type LngLat,
 } from './lib/geo';
-import { aheadPhrase, hazardPhrase, instruction, PHRASES, type Lang } from './lib/instructions';
+import { aheadPhrase, hazardPhrase, instruction, nextAction, PHRASES, worthSaying, type Lang } from './lib/instructions';
 import { rushHourFactor } from './lib/eta';
 import {
   HAZARDS,
   initials,
-  REPORT_LIFETIME_MS,
+  reportLifetime,
   type HazardReport,
   type HazardType,
   type Profile,
@@ -39,6 +40,8 @@ import {
 } from './lib/models';
 import { inviteCodeFromPath, memberColor, type FamilyMember } from './lib/family';
 import { speak, stopSpeaking } from './lib/voice';
+import { keepScreenOn, letScreenSleep } from './lib/keepAwake';
+import { countOpen, countTrip } from './lib/visits';
 import { useGeolocation } from './hooks/useGeolocation';
 import { useArea, useFamily, useFamilySharing } from './hooks/useFamily';
 import { useTheme } from './hooks/useTheme';
@@ -48,11 +51,22 @@ import { usePresence } from './hooks/usePresence';
 import { useNavProgress, useSimulatedDrive } from './hooks/useNavigation';
 import { requestCompassPermission, useCompass } from './hooks/useCompass';
 
-type Screen = 'home' | 'search' | 'route' | 'nav' | 'family' | 'account' | 'report' | 'save' | 'steps' | 'feedback';
+type Screen =
+  | 'home'
+  | 'search'
+  | 'route'
+  | 'nav'
+  | 'family'
+  | 'account'
+  | 'privacy'
+  | 'report'
+  | 'save'
+  | 'steps'
+  | 'feedback';
 /** Screens that open as a sheet over whatever is underneath. */
 const MODALS: Screen[] = ['report', 'save', 'steps', 'feedback'];
 /** Full-screen pages opened from home; home stays mounted underneath them. */
-const HOME_OVERLAYS: Screen[] = ['search', 'account', 'family', 'report', 'save', 'feedback'];
+const HOME_OVERLAYS: Screen[] = ['search', 'account', 'privacy', 'family', 'report', 'save', 'feedback'];
 
 /**
  * Add ?sim to the address to fake the drive, e.g. testing on a laptop. It also
@@ -69,6 +83,8 @@ const HAZARD_SHOW_M = 1500;
 const HAZARD_SPEAK_M = 600;
 /** Closer than this to the stop (e.g. parked at the school gate) counts as having reached it. */
 const AT_STOP_M = 150;
+/** The whole-route view goes back to following the car after this long. */
+const OVERVIEW_MS = 15_000;
 
 /** Pixels the UI covers at the top/bottom, so the map centres in the visible gap. */
 const INSETS: Partial<Record<Screen, { top: number; bottom: number }>> = {
@@ -102,6 +118,10 @@ export default function App() {
     [],
   );
   const family = useFamily(phase === 'app' && profile != null);
+  // How many phones use OTW: one anonymous count a day (Account → Privacy & data).
+  useEffect(() => {
+    if (phase === 'app') countOpen();
+  }, [phase]);
 
   // --- Screens. Kept in browser history so the phone's back gesture works. ---
   const [stack, setStack] = useState<Screen[]>(['home']);
@@ -263,6 +283,8 @@ export default function App() {
   const startTrip = () => {
     if (!routes || !destination) return;
     void requestCompassPermission(); // iPhone only asks inside a tap
+    keepScreenOn();
+    if (realPos && !FORCE_SIM) countTrip(); // demo drives aren't real trips
     const route = routes[selected];
     spoken.current.clear();
     pace.current = null;
@@ -363,7 +385,28 @@ export default function App() {
     if (base === 'nav') setFollowing(true);
   }, [base]);
 
-  // Voice: once ~400 m before a turn, once just before it.
+  // "Whole route" button: zoom out to the rest of the trip, then back to the car
+  // by itself, unless the user starts moving the map around.
+  const [overview, setOverview] = useState<{ coords: LngLat[]; key: number } | null>(null);
+  const showOverview = () => {
+    if (!activeRoute || !routeCum) return;
+    const covered = progress?.covered ?? 0;
+    const next = routeCum.findIndex((d) => d > covered);
+    const ahead = next === -1 ? [] : activeRoute.coords.slice(next);
+    setFollowing(false);
+    setOverview({ coords: shownNavPos ? [shownNavPos, ...ahead] : ahead, key: Date.now() });
+  };
+  useEffect(() => {
+    if (!overview) return;
+    const t = window.setTimeout(() => setFollowing(true), OVERVIEW_MS);
+    return () => window.clearTimeout(t);
+  }, [overview]);
+  useEffect(() => {
+    if (following) setOverview(null);
+  }, [following]);
+
+  // Voice: once ~400 m before a turn, once just before it. Steps that only say
+  // "carry on" are skipped, so the distance counts on to the next real turn.
   const spoken = useRef(new Set<string>());
   useEffect(() => {
     if (base !== 'nav' || !progress || !activeRoute || muted) return;
@@ -374,17 +417,18 @@ export default function App() {
       }
       return;
     }
-    const step = activeRoute.steps[progress.stepIndex];
-    if (!step || progress.stepIndex === 0) return;
-    const far = `${progress.stepIndex}-far`;
-    const near = `${progress.stepIndex}-near`;
-    if (progress.toManeuver < 60 && !spoken.current.has(near)) {
+    const { index, distance: toTurn } = nextAction(activeRoute.steps, progress.stepIndex, progress.toManeuver);
+    const step = activeRoute.steps[index];
+    if (!step || index === 0 || !worthSaying(step)) return;
+    const far = `${index}-far`;
+    const near = `${index}-near`;
+    if (toTurn < 60 && !spoken.current.has(near)) {
       spoken.current.add(near);
       spoken.current.add(far);
       speak(instruction(step, lang), lang);
-    } else if (progress.toManeuver < 400 && !spoken.current.has(far)) {
+    } else if (toTurn < 400 && !spoken.current.has(far)) {
       spoken.current.add(far);
-      speak(aheadPhrase(progress.toManeuver, step, lang), lang);
+      speak(aheadPhrase(toTurn, step, lang), lang);
     }
   }, [base, progress, activeRoute, muted, lang]);
 
@@ -438,17 +482,11 @@ export default function App() {
       .finally(() => setRerouting(false));
   }, [base, simulate, progress, destination, shownStop, realPos, rerouting, muted, lang]);
 
-  // Keep the screen on while driving.
+  // Keep the screen on while driving (also asked for in the Start tap, for iPhones).
   useEffect(() => {
-    if (base !== 'nav' || !('wakeLock' in navigator)) return;
-    let lock: WakeLockSentinel | null = null;
-    navigator.wakeLock
-      .request('screen')
-      .then((l) => (lock = l))
-      .catch(() => {});
-    return () => {
-      lock?.release().catch(() => {});
-    };
+    if (base !== 'nav') return;
+    keepScreenOn();
+    return letScreenSleep;
   }, [base]);
 
   // --- Hazard reports (on this phone until family sharing exists) ---
@@ -457,12 +495,12 @@ export default function App() {
     const id = window.setInterval(() => setNow(Date.now()), 60000);
     return () => window.clearInterval(id);
   }, []);
-  const liveReports = useMemo(() => reports.filter((r) => now - r.at < REPORT_LIFETIME_MS), [reports, now]);
+  const liveReports = useMemo(() => reports.filter((r) => now - r.at < reportLifetime(r.type)), [reports, now]);
   const reportPos = base === 'nav' ? shownNavPos : realPos;
   const sendReport = (type: HazardType, note: string) => {
     if (!reportPos) return;
     const report: HazardReport = { id: `${Date.now()}`, type, coord: reportPos, note, at: Date.now() };
-    setReports((list) => [...list.filter((r) => Date.now() - r.at < REPORT_LIFETIME_MS), report]);
+    setReports((list) => [...list.filter((r) => Date.now() - r.at < reportLifetime(r.type)), report]);
     const label = HAZARDS.find((h) => h.type === type)!.label;
     showToast(`${label} reported`);
     back();
@@ -556,6 +594,7 @@ export default function App() {
   const leaveStyle = lastMove.current === 'pop' ? 'pop' : 'fade';
   const searchView = usePresence(phase === 'app' && base === 'search');
   const accountView = usePresence(phase === 'app' && base === 'account');
+  const privacyView = usePresence(phase === 'app' && base === 'privacy');
   const familyView = usePresence(phase === 'app' && base === 'family');
   const reportView = usePresence(phase === 'app' && top === 'report', 250);
   const saveView = usePresence(phase === 'app' && top === 'save' && placeToSave != null, 250);
@@ -585,12 +624,15 @@ export default function App() {
         reports={liveReports}
         family={familyPins}
         focus={familyFocus}
+        overview={base === 'nav' ? overview : null}
         insets={insets}
         recenterKey={recenterKey}
         follow={following}
         onSelectRoute={setSelected}
         onUserMove={() => {
-          if (base === 'nav') setFollowing(false);
+          if (base !== 'nav') return;
+          setFollowing(false);
+          setOverview(null); // looking around: stay put until Re-centre
         }}
         onLongPress={dropPin}
       />
@@ -670,6 +712,7 @@ export default function App() {
               demoSpeed={simulate ? DEMO_SPEEDS[demoSpeedIdx] : null}
               following={following}
               onRecenter={() => setFollowing(true)}
+              onOverview={showOverview}
               onToggleMute={() => {
                 if (!muted) stopSpeaking();
                 setMuted((m) => !m);
@@ -709,8 +752,9 @@ export default function App() {
               onToggleTheme={toggleTheme}
               lang={lang}
               onLang={setLang}
-              onTestVoice={(l) => speak(PHRASES.test[l], l)}
+              onTestVoice={(l) => speak(PHRASES.test[l], l, { repeat: true })}
               onFeedback={() => go('feedback')}
+              onPrivacy={() => go('privacy')}
               onLogout={() => {
                 backTo(0);
                 // Logged out, so family stop seeing this phone.
@@ -720,6 +764,10 @@ export default function App() {
               }}
               onBack={back}
             />
+          )}
+
+          {privacyView.mounted && (
+            <PrivacyScreen leaving={privacyView.leaving ? leaveStyle : null} onBack={back} />
           )}
 
           {familyView.mounted && (

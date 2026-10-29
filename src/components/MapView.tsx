@@ -15,7 +15,7 @@ import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?url';
 setWorkerUrl(workerUrl);
 import type { Route } from '../lib/api';
 import type { LngLat } from '../lib/geo';
-import { buildMapStyle } from '../lib/mapStyle';
+import { BUILDINGS_3D, buildMapStyle } from '../lib/mapStyle';
 import { HAZARDS, type HazardReport } from '../lib/models';
 import type { Theme } from '../hooks/useTheme';
 
@@ -58,6 +58,8 @@ interface Props {
   family: FamilyPin[];
   /** Fly to this spot when key changes, e.g. after tapping someone in Family. */
   focus: { coord: LngLat; key: number } | null;
+  /** While driving: zoom out to show these points (the rest of the route) when key changes. */
+  overview: { coords: LngLat[]; key: number } | null;
   /** Space covered by the UI at the top and bottom, so the map centres in what's visible. */
   insets: { top: number; bottom: number };
   /** Bump to fly back to the user. */
@@ -124,6 +126,81 @@ function addRouteLayers(map: MapLibreMap, theme: Theme) {
     },
     firstLabel,
   );
+}
+
+const SIGNALS_SOURCE = 'otw-signals';
+const SIGNALS_LAYER = 'otw-signals';
+const SIGNAL_ICON = 'otw-traffic-light';
+/** Traffic-light junctions (mapped spots only, no live colour), from scripts/sabah-signals.mjs. */
+const SIGNALS_URL = '/map/sabah-signals.json';
+let signalsData: Promise<FeatureCollection> | null = null;
+
+function loadSignals(): Promise<FeatureCollection> {
+  signalsData ??= fetch(SIGNALS_URL)
+    .then((r) => (r.ok ? r.json() : { points: [] }))
+    .then((d: { points: LngLat[] }) => ({
+      type: 'FeatureCollection' as const,
+      features: d.points.map((coordinates) => ({
+        type: 'Feature' as const,
+        properties: {},
+        geometry: { type: 'Point' as const, coordinates },
+      })),
+    }))
+    .catch(() => {
+      signalsData = null; // try again next time
+      return { type: 'FeatureCollection' as const, features: [] };
+    });
+  return signalsData;
+}
+
+/** A small grey traffic light: a dark rounded box with three unlit lamps. */
+function signalIcon(): ImageData {
+  const scale = 2;
+  const [w, h] = [14, 26];
+  const canvas = document.createElement('canvas');
+  canvas.width = w * scale;
+  canvas.height = h * scale;
+  const ctx = canvas.getContext('2d')!;
+  ctx.scale(scale, scale);
+  ctx.fillStyle = '#26302D';
+  ctx.strokeStyle = '#FFFFFF';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  if ('roundRect' in ctx) ctx.roundRect(1, 1, w - 2, h - 2, 4);
+  else (ctx as CanvasRenderingContext2D).rect(1, 1, w - 2, h - 2); // older iPhones
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = '#B9C4BF';
+  for (const y of [6.5, 13, 19.5]) {
+    ctx.beginPath();
+    ctx.arc(w / 2, y, 2.6, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  return ctx.getImageData(0, 0, canvas.width, canvas.height);
+}
+
+/** Traffic lights, shown from street level zoom; drawn above the route, under the names. */
+function addSignalLayer(map: MapLibreMap) {
+  if (map.getSource(SIGNALS_SOURCE)) return;
+  if (!map.hasImage(SIGNAL_ICON)) map.addImage(SIGNAL_ICON, signalIcon(), { pixelRatio: 2 });
+  map.addSource(SIGNALS_SOURCE, { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+  const firstLabel = (map.getStyle().layers ?? []).find((l) => l.type === 'symbol')?.id;
+  map.addLayer(
+    {
+      id: SIGNALS_LAYER,
+      type: 'symbol',
+      source: SIGNALS_SOURCE,
+      minzoom: 14.5,
+      layout: { 'icon-image': SIGNAL_ICON, 'icon-size': ['interpolate', ['linear'], ['zoom'], 14.5, 0.7, 17, 1] },
+    },
+    firstLabel,
+  );
+  void loadSignals().then((data) => (map.getSource(SIGNALS_SOURCE) as GeoJSONSource | undefined)?.setData(data));
+}
+
+/** Raised 3D buildings only in the tilted driving view; flat everywhere else. */
+function show3dBuildings(map: MapLibreMap, mode: MapMode) {
+  if (map.getLayer(BUILDINGS_3D)) map.setLayoutProperty(BUILDINGS_3D, 'visibility', mode === 'nav' ? 'visible' : 'none');
 }
 
 /**
@@ -228,6 +305,8 @@ export default function MapView(props: Props) {
       const p = latest.current;
       addRouteLayers(map, shownTheme.current);
       (map.getSource(SOURCE) as GeoJSONSource).setData(routeData(p.routes, p.selectedRoute, p.mode));
+      addSignalLayer(map);
+      show3dBuildings(map, p.mode);
     });
     map.on('click', LINE_LAYER, (e) => {
       const index = e.features?.[0]?.properties?.index;
@@ -301,6 +380,11 @@ export default function MapView(props: Props) {
     shownTheme.current = props.theme;
     map.setStyle(buildMapStyle(props.theme));
   }, [props.theme]);
+
+  // 3D buildings on when driving starts, off after (style.load covers a style still loading).
+  useEffect(() => {
+    if (mapRef.current) show3dBuildings(mapRef.current, props.mode);
+  }, [props.mode]);
 
   // Route lines.
   useEffect(() => {
@@ -436,6 +520,23 @@ export default function MapView(props: Props) {
       duration: 900,
     });
   }, [props.mode, props.routes, props.insets.top, props.insets.bottom]);
+
+  // "Whole route" while driving: what's left of it, flat and north up.
+  useEffect(() => {
+    const map = mapRef.current;
+    const overview = latest.current.overview;
+    if (!map || !overview || overview.coords.length < 2) return;
+    const bounds = new LngLatBounds();
+    overview.coords.forEach((c) => bounds.extend(c as LngLatLike));
+    map.fitBounds(bounds, {
+      // The driving camera already set the map's padding to the UI insets; this comes on top.
+      padding: { top: 24, bottom: 24, left: 40, right: 72 },
+      maxZoom: 16,
+      pitch: 0,
+      bearing: 0,
+      duration: 900,
+    });
+  }, [props.overview?.key]);
 
   // Camera while driving: follow and turn with the car, unless the user is looking around.
   useEffect(() => {

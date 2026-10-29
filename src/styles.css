@@ -1573,6 +1573,13 @@ textarea.input {
   gap: 10px;
 }
 
+/* Seven kinds: the last one (speed camera) gets the whole bottom row. */
+.hazard-grid > :last-child:nth-child(3n + 1) {
+  grid-column: 1 / -1;
+  height: 64px;
+  flex-direction: row;
+}
+
 .hazard-tile {
   height: 96px;
   padding: 0 4px;
@@ -1619,6 +1626,31 @@ textarea.input {
 
 .row-sub.wrap {
   white-space: normal;
+}
+
+.privacy-points {
+  margin: 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 15px;
+  line-height: 1.45;
+}
+
+.privacy-row {
+  align-items: flex-start;
+  padding-top: 10px;
+  padding-bottom: 10px;
+}
+
+.privacy-row .row-sub {
+  line-height: 1.45;
+}
+
+.card-text a {
+  color: var(--accent);
+  font-weight: 700;
 }
 
 .report-marker {

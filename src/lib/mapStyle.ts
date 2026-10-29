@@ -154,6 +154,9 @@ const ROADS: {
   },
 ];
 
+/** Layer id of the 3D buildings, hidden unless driving. */
+export const BUILDINGS_3D = 'building-3d';
+
 export function buildMapStyle(theme: Theme): StyleSpecification {
   const p = PALETTES[theme];
 
@@ -258,6 +261,31 @@ export function buildMapStyle(theme: Theme): StyleSpecification {
       },
       ...roadLayers('', notBridgeOrTunnel),
       ...roadLayers('-bridge', isBridge),
+      {
+        // Raised buildings for the tilted driving view (switched on by MapView).
+        // Most buildings in Sabah have no height in OpenStreetMap, so they get a
+        // low 5 m; they rise as you zoom in so they don't pop up all at once.
+        id: BUILDINGS_3D,
+        type: 'fill-extrusion',
+        source: 'omt',
+        'source-layer': 'building',
+        minzoom: 15,
+        layout: { visibility: 'none' },
+        paint: {
+          'fill-extrusion-color': p.building,
+          'fill-extrusion-opacity': 0.85,
+          'fill-extrusion-height': [
+            'interpolate',
+            ['linear'],
+            ['zoom'],
+            15,
+            0,
+            16,
+            ['coalesce', ['get', 'render_height'], 5],
+          ],
+          'fill-extrusion-base': ['coalesce', ['get', 'render_min_height'], 0],
+        },
+      },
       {
         id: 'water-label',
         type: 'symbol',
