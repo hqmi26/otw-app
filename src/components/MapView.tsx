@@ -33,6 +33,17 @@ const LINE_LAYER = 'otw-route-line';
 
 export type MapMode = 'browse' | 'preview' | 'nav';
 
+/** Family on the map: a dashed circle for an area, or a moving car during a live trip. */
+export interface FamilyPin {
+  id: string;
+  kind: 'area' | 'car';
+  coord: LngLat;
+  /** e.g. "Mak · Likas" or "Ayah · ETA 6:21 PM". */
+  label: string;
+  people: { initials: string; color: string }[];
+  heading?: number | null;
+}
+
 interface Props {
   theme: Theme;
   mode: MapMode;
@@ -44,6 +55,9 @@ interface Props {
   /** A stop on the way to the destination. */
   stop: LngLat | null;
   reports: HazardReport[];
+  family: FamilyPin[];
+  /** Fly to this spot when key changes, e.g. after tapping someone in Family. */
+  focus: { coord: LngLat; key: number } | null;
   /** Space covered by the UI at the top and bottom, so the map centres in what's visible. */
   insets: { top: number; bottom: number };
   /** Bump to fly back to the user. */
@@ -145,6 +159,36 @@ function makeDestinationMarker(): HTMLElement {
   return el;
 }
 
+/** Built with text nodes, never innerHTML, because names are typed by family. */
+function fillFamilyMarker(el: HTMLElement, pin: FamilyPin) {
+  el.className = `family-marker is-${pin.kind}`;
+  el.setAttribute('role', 'img');
+  el.setAttribute('aria-label', pin.label);
+  el.replaceChildren();
+  const spot = document.createElement('span');
+  spot.className = 'family-spot';
+  spot.style.setProperty('--c', pin.people[0]?.color ?? '#0e7c6b');
+  if (pin.kind === 'car') {
+    const arrow = document.createElement('span');
+    arrow.className = 'family-arrow';
+    arrow.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5l7.6 18.4-7.6-4.3-7.6 4.3z"/></svg>';
+    arrow.style.transform = `rotate(${pin.heading ?? 0}deg)`;
+    spot.append(arrow);
+  } else {
+    for (const person of pin.people.slice(0, 3)) {
+      const face = document.createElement('span');
+      face.className = 'family-face';
+      face.style.background = person.color;
+      face.textContent = person.initials;
+      spot.append(face);
+    }
+  }
+  const label = document.createElement('span');
+  label.className = 'family-label';
+  label.textContent = pin.label;
+  el.append(spot, label);
+}
+
 function makeStopMarker(): HTMLElement {
   const el = document.createElement('div');
   el.className = 'stop-marker';
@@ -160,6 +204,7 @@ export default function MapView(props: Props) {
   const destMarker = useRef<Marker | null>(null);
   const stopMarker = useRef<Marker | null>(null);
   const reportMarkers = useRef(new Map<string, Marker>());
+  const familyMarkers = useRef(new Map<string, { marker: Marker; look: string }>());
   const latest = useRef(props);
   latest.current = props;
   const centredOnUser = useRef(false);
@@ -245,6 +290,7 @@ export default function MapView(props: Props) {
       destMarker.current = null;
       stopMarker.current = null;
       reportMarkers.current.clear();
+      familyMarkers.current.clear();
     };
   }, []);
 
@@ -339,6 +385,42 @@ export default function MapView(props: Props) {
       }
     }
   }, [props.reports]);
+
+  // Family areas and live cars.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const shown = familyMarkers.current;
+    const ids = new Set(props.family.map((p) => p.id));
+    for (const [id, { marker }] of shown) {
+      if (!ids.has(id)) {
+        marker.remove();
+        shown.delete(id);
+      }
+    }
+    for (const pin of props.family) {
+      const look = JSON.stringify([pin.kind, pin.label, pin.people, pin.heading]);
+      let entry = shown.get(pin.id);
+      if (!entry) {
+        const el = document.createElement('div');
+        fillFamilyMarker(el, pin);
+        entry = { marker: new Marker({ element: el }).setLngLat(pin.coord).addTo(map), look };
+        shown.set(pin.id, entry);
+      } else if (entry.look !== look) {
+        fillFamilyMarker(entry.marker.getElement(), pin);
+        entry.look = look;
+      }
+      entry.marker.setLngLat(pin.coord);
+    }
+  }, [props.family]);
+
+  // Fly to someone in the family. Only a new key means a new tap.
+  useEffect(() => {
+    const map = mapRef.current;
+    const focus = latest.current.focus;
+    if (!map || !focus) return;
+    map.flyTo({ center: focus.coord, zoom: 14, duration: 900 });
+  }, [props.focus?.key]);
 
   // Camera for the route preview: show every route.
   useEffect(() => {
