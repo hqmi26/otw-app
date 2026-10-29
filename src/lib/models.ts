@@ -70,6 +70,12 @@ export interface HazardReport {
   note: string;
   /** ms since epoch */
   at: number;
+  /** Last time someone said it's still there (ms); it lasts from then. */
+  seenAt?: number;
+  /** How many drivers said it's still there. */
+  ups?: number;
+  /** From the OTW server, so everyone nearby sees it (false: only on this phone). */
+  shared?: boolean;
 }
 
 /** Reports disappear after this long. */

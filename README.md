@@ -18,10 +18,20 @@ Matches the design canvas ("OTW – Family Navigation App"):
 - Save any place with the ⭐ on the route sheet or the "Add" chip
 - Directions with up to three routes to choose from, ETA and arrival time (Valhalla, OSRM as backup)
 - Turn-by-turn: next turn, "then…" hint, voice, mute, rerouting, screen stays on
-- Report a hazard (pinned on the map for 2 hours, on this phone only for now)
-- Account: change username, dark mode switch, log out
-- Family page (sharing arrives with accounts) with a "Share OTW" button
+  (also after coming back from WhatsApp, with a silent-video backup for phones that refuse)
+- The voice and turn card only speak up for real turns, not "continue on Jalan …"
+- "Whole route" button while driving; it goes back to the car after 15 seconds
+- "Add a stop" before or during a trip: the Petrol / Food / Surau / Parking chips then
+  list places along the road ahead, in the order you pass them
+- Raised 3D buildings in the driving view, and traffic-light icons at Sabah junctions
+- Report a hazard or a speed camera: shown to every OTW driver nearby without a name,
+  for 2 hours (cameras 30 days); tap one for "Still there?" (kept on the phone if offline)
+- Family sharing: family see your area (never the exact spot) and trip ETA, a live car
+  only with "Share live trip"; invite link; Private switch
+- Account: change username, dark mode switch, Privacy & data page, log out
 - Send feedback (home panel or Account): ideas and bug reports are saved for you to review
+- Rush protection: a slow or busy route/search service is skipped for a minute instead of
+  leaving the app stuck on "Finding routes…" (`src/lib/net.ts`)
 - Phone back button / swipe goes back a screen
 
 ## Run it on your computer
@@ -31,7 +41,7 @@ npm install
 npm run dev
 ```
 
-Open http://localhost:5173. A laptop has no GPS, so trips start from KLCC and the
+Open http://localhost:5173. A laptop has no GPS, so trips start from KK city centre and the
 navigation screen does a **demo drive** (tap the "Demo drive ×1" chip to speed it up).
 Add `?sim` to the address to force the demo drive even when GPS works.
 
@@ -68,6 +78,32 @@ screen size, for reproducing bugs. No location is sent.
 shows "Couldn't send". To try the whole thing, run `npm run preview:cloudflare` and
 open http://localhost:8788. It uses a local test database in `.wrangler/`.
 
+## Shared reports and usage count
+
+Both use the same `DB` database as feedback (`otw-feedback`), so there's nothing new
+to set up; their tables make themselves.
+
+- `functions/api/reports/[[path]].ts` keeps hazard reports: what, where, note and time,
+  no name or ID. Rows are deleted once they run out or drivers say they're gone.
+- `functions/api/visit.ts` counts phones that opened OTW each day and trips started,
+  by phone type only (Android / iPhone / other).
+
+**Reading them:** D1 → `otw-feedback` → **Console**, then
+
+```sql
+SELECT day, kind, device, count FROM visits ORDER BY day DESC, kind;
+SELECT type, note, datetime(created_at, 'unixepoch', '+8 hours') AS at, ups, downs FROM reports ORDER BY created_at DESC;
+```
+
+## Traffic lights
+
+`public/map/sabah-signals.json` has the traffic-light junctions from OpenStreetMap
+(points within 50 m are joined into one per junction). Refresh it by hand now and then:
+
+```bash
+node scripts/sabah-signals.mjs
+```
+
 ## Sabah places (search and map labels)
 
 `public/places/sabah.json` holds Sabah's places, tamans, kampungs, streets, peaks,
@@ -103,7 +139,8 @@ OpenStreetMap's is ODbL; the map credit names both.
 | Search in Sabah | Our own list (`public/places/sabah.json`) | Searched on the phone |
 | Search elsewhere | Photon public server | Fair use only |
 | Routing | FOSSGIS Valhalla server (OSRM demo server as backup) | Low use only, one request a second. Gives 2–3 routes; OSRM finds only one in KK |
-| Feedback | Cloudflare Pages Functions + D1 | Free tier, plenty for feedback |
+| Feedback, reports, usage count, family | Cloudflare Pages Functions + D1 | Free tier |
+| Traffic lights | OpenStreetMap (Overpass), saved in `public/map/` | Refreshed by hand |
 
 For a public launch, run Photon and Valhalla on our own server in Malaysia so
 nobody's location leaves the country. None of these know about live traffic:
@@ -116,15 +153,19 @@ the route times are for normal roads, with a rough rush-hour allowance
 - `src/components/MapView.tsx` – the map, markers, route lines, camera
 - `src/components/*Screen.tsx`, `RouteSheet.tsx`, `NavigationView.tsx` – the UI
 - `src/lib/api.ts` – Photon search and routing calls
+- `src/lib/net.ts` – time limits, "busy" handling and short memory for those calls
+- `src/lib/voice.ts`, `src/lib/instructions.ts` – the spoken and shown turn instructions
+- `src/lib/keepAwake.ts` – keeps the screen on while driving
+- `src/lib/reports.ts`, `src/lib/visits.ts` – shared reports and the usage count (phone side)
 - `src/lib/places.ts` – loads and searches Sabah's place list on the phone
 - `src/lib/search.ts` – picks where a search goes: the user's own places, Sabah's list, or Photon
 - `scripts/build_places.py` – builds Sabah's place list (run monthly by GitHub Actions)
 - `src/lib/geo.ts` – distance maths and formatting
 - `src/hooks/useNavigation.ts` – progress along the route and the demo drive
-- `functions/api/feedback.ts` – saves feedback (runs on Cloudflare, not in the phone)
+- `functions/api/*` – feedback, family, reports and usage count (run on Cloudflare, not in the phone)
 
 ## Next
 
-1. Family accounts and live location (Supabase)
-2. Saved places and hazard reports
+1. Live traffic routes with TomTom (waiting for the navigation licence)
+2. Saved places across phones
 3. Android app with Capacitor

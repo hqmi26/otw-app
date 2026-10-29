@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { BackIcon, CarIcon, ChartIcon, ChatIcon, ClockIcon, LockIcon, PinIcon, SearchIcon, UsersIcon } from './icons';
+import { AlertIcon, BackIcon, CarIcon, ChartIcon, ChatIcon, ClockIcon, LockIcon, PinIcon, SearchIcon, UsersIcon } from './icons';
 
 interface Props {
   leaving: 'pop' | 'fade' | null;
@@ -34,6 +34,11 @@ const FLOWS: Flow[] = [
     icon: <UsersIcon size={20} />,
     title: 'Family',
     text: 'Only if you join a family: your area (e.g. Likas), and where you’re driving to with the arrival time. Your exact spot only while “Share live trip” is on. Switch on Private to hide it all. No history is kept.',
+  },
+  {
+    icon: <AlertIcon size={20} />,
+    title: 'Reports',
+    text: 'When you report a flood, accident or camera: what it is, where you were, and your note go to OTW’s server and are shown to OTW drivers nearby, without your name. Gone after 2 hours (cameras 30 days), sooner if drivers say it’s cleared.',
   },
   {
     icon: <ChatIcon size={20} />,
@@ -71,7 +76,7 @@ export default function PrivacyScreen(p: Props) {
           <h2 className="card-title">Your trips are yours</h2>
           <ul className="privacy-points">
             <li>No ads. OTW doesn’t sell your data or track you.</li>
-            <li>Your name, phone number, saved places, searches and reports stay on this phone.</li>
+            <li>Your name, phone number, saved places and searches stay on this phone.</li>
             <li>Family see the area you’re in, never your exact spot, unless you switch on “Share live trip”.</li>
           </ul>
         </div>

@@ -11,6 +11,8 @@ import LocationScreen from './components/LocationScreen';
 import AccountScreen from './components/AccountScreen';
 import FamilyScreen from './components/FamilyScreen';
 import PrivacyScreen from './components/PrivacyScreen';
+import ReportInfoSheet from './components/ReportInfoSheet';
+import { fetchReports, shareReport, voteReport } from './lib/reports';
 import ReportSheet from './components/ReportSheet';
 import SavePlaceSheet from './components/SavePlaceSheet';
 import StepsSheet from './components/StepsSheet';
@@ -67,9 +69,10 @@ type Screen =
   | 'save'
   | 'steps'
   | 'feedback'
-  | 'addplace';
+  | 'addplace'
+  | 'reportinfo';
 /** Screens that open as a sheet over whatever is underneath. */
-const MODALS: Screen[] = ['report', 'save', 'steps', 'feedback'];
+const MODALS: Screen[] = ['report', 'save', 'steps', 'feedback', 'reportinfo'];
 /** Full-screen pages opened from home; home stays mounted underneath them. */
 const HOME_OVERLAYS: Screen[] = ['search', 'account', 'privacy', 'family', 'report', 'save', 'feedback'];
 
@@ -559,21 +562,82 @@ export default function App() {
     return letScreenSleep;
   }, [base]);
 
-  // --- Hazard reports (on this phone until family sharing exists) ---
+  // --- Hazard reports: shared with every OTW driver nearby (no names). One that
+  // couldn't be sent (offline) stays on this phone. ---
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const id = window.setInterval(() => setNow(Date.now()), 60000);
     return () => window.clearInterval(id);
   }, []);
-  const liveReports = useMemo(() => reports.filter((r) => now - r.at < reportLifetime(r.type)), [reports, now]);
+  const [sharedReports, setSharedReports] = useState<HazardReport[]>([]);
+  /** Reports this phone made or answered, so it doesn't ask "Still there?" about them again. */
+  const [answered, setAnswered] = useStored<string[]>('otw-report-answers', [], isArray);
+  const markAnswered = (id: string) => setAnswered((list) => [...list.filter((x) => x !== id), id].slice(-200));
+  const reportsNear = useRef(origin);
+  reportsNear.current = origin;
+  useEffect(() => {
+    if (phase !== 'app' || !locationReady) return;
+    const load = () => {
+      if (reportsNear.current) fetchReports(reportsNear.current).then(setSharedReports, () => {});
+    };
+    load();
+    const id = window.setInterval(load, 120_000);
+    return () => window.clearInterval(id);
+  }, [phase, locationReady]);
+  const liveReports = useMemo(() => {
+    const lasts = (r: HazardReport) => now - (r.seenAt ?? r.at) < reportLifetime(r.type);
+    const shared = sharedReports.filter(lasts);
+    const ids = new Set(shared.map((r) => r.id));
+    return [...shared, ...reports.filter((r) => !ids.has(r.id) && lasts(r))];
+  }, [sharedReports, reports, now]);
   const reportPos = base === 'nav' ? shownNavPos : realPos;
   const sendReport = (type: HazardType, note: string) => {
     if (!reportPos) return;
-    const report: HazardReport = { id: `${Date.now()}`, type, coord: reportPos, note, at: Date.now() };
-    setReports((list) => [...list.filter((r) => Date.now() - r.at < reportLifetime(r.type)), report]);
+    const local: HazardReport = { id: `local-${Date.now()}`, type, coord: reportPos, note, at: Date.now() };
+    setReports((list) => [...list.filter((r) => Date.now() - r.at < reportLifetime(r.type)), local]);
     const label = HAZARDS.find((h) => h.type === type)!.label;
     showToast(`${label} reported`);
     back();
+    shareReport(type, reportPos, note)
+      .then((shared) => {
+        setReports((list) => list.filter((r) => r.id !== local.id)); // it's on the server now
+        setSharedReports((list) => [shared, ...list]);
+        markAnswered(shared.id);
+      })
+      .catch(() => {
+        // Not sent (offline): it stays on this phone.
+      });
+  };
+
+  // Tap a report on the map: "Still there?"
+  const [tappedReport, setTappedReport] = useState<HazardReport | null>(null);
+  const openReport = (id: string) => {
+    const report = liveReports.find((r) => r.id === id);
+    if (!report) return;
+    setTappedReport(report);
+    go('reportinfo');
+  };
+  const answerReport = (still: boolean) => {
+    const r = tappedReport;
+    if (!r) return;
+    markAnswered(r.id);
+    back();
+    if (!r.shared) {
+      if (!still) setReports((list) => list.filter((x) => x.id !== r.id));
+      showToast(still ? 'Thanks!' : 'Report removed');
+      return;
+    }
+    showToast(still ? 'Thanks! Drivers will see it’s still there' : 'Thanks! It goes once another driver agrees');
+    voteReport(r.id, still)
+      .then((updated) =>
+        setSharedReports((list) =>
+          updated ? list.map((x) => (x.id === r.id ? updated : x)) : list.filter((x) => x.id !== r.id),
+        ),
+      )
+      .catch(() => {
+        // Didn't get through (offline, or too many at once): it can be answered again.
+        setAnswered((list) => list.filter((x) => x !== r.id));
+      });
   };
 
   // Reports on the road ahead: a chip from 1.5 km, and the voice once at ~600 m.
@@ -667,6 +731,7 @@ export default function App() {
   const privacyView = usePresence(phase === 'app' && base === 'privacy');
   const familyView = usePresence(phase === 'app' && base === 'family');
   const reportView = usePresence(phase === 'app' && top === 'report', 250);
+  const reportInfoView = usePresence(phase === 'app' && top === 'reportinfo' && tappedReport != null, 250);
   const saveView = usePresence(phase === 'app' && top === 'save' && placeToSave != null, 250);
   const stepsRoute = base === 'nav' ? activeRoute : (routes?.[selected] ?? null);
   const stepsView = usePresence(phase === 'app' && top === 'steps' && stepsRoute != null, 250);
@@ -705,6 +770,7 @@ export default function App() {
         destination={destination?.coord ?? null}
         stop={shownStop?.coord ?? null}
         reports={liveReports}
+        onReportTap={openReport}
         family={familyPins}
         focus={familyFocus}
         overview={base === 'nav' ? overview : null}
@@ -907,6 +973,16 @@ export default function App() {
               hasLocation={reportPos != null}
               leaving={reportView.leaving}
               onSend={sendReport}
+              onClose={back}
+            />
+          )}
+
+          {reportInfoView.mounted && tappedReport && (
+            <ReportInfoSheet
+              report={tappedReport}
+              answered={answered.includes(tappedReport.id)}
+              leaving={reportInfoView.leaving}
+              onAnswer={answerReport}
               onClose={back}
             />
           )}

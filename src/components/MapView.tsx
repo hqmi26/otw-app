@@ -69,6 +69,8 @@ interface Props {
   /** A stop on the way to the destination. */
   stop: LngLat | null;
   reports: HazardReport[];
+  /** A report pin was tapped ("Still there?"). */
+  onReportTap: (id: string) => void;
   family: FamilyPin[];
   /** Fly to this spot when key changes, e.g. after tapping someone in Family. */
   focus: { coord: LngLat; key: number } | null;
@@ -327,10 +329,10 @@ function makeUserMarker(): HTMLElement {
 }
 
 function makeReportMarker(report: HazardReport): HTMLElement {
-  const el = document.createElement('div');
+  const el = document.createElement('button');
+  el.type = 'button';
   el.className = 'report-marker';
-  el.setAttribute('role', 'img');
-  el.setAttribute('aria-label', `${HAZARDS.find((h) => h.type === report.type)?.label ?? 'Hazard'} reported here`);
+  el.setAttribute('aria-label', `${HAZARDS.find((h) => h.type === report.type)?.label ?? 'Hazard'} reported here. Still there?`);
   el.innerHTML =
     '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l10 18H2z"/><path d="M12 10v5"/><path d="M12 18v.5"/></svg>';
   return el;
@@ -645,7 +647,12 @@ export default function MapView(props: Props) {
     }
     for (const r of props.reports) {
       if (!reportMarkers.current.has(r.id)) {
-        reportMarkers.current.set(r.id, new Marker({ element: makeReportMarker(r) }).setLngLat(r.coord).addTo(map));
+        const el = makeReportMarker(r);
+        el.addEventListener('click', (e) => {
+          e.stopPropagation(); // not a tap on the map underneath
+          latest.current.onReportTap(r.id);
+        });
+        reportMarkers.current.set(r.id, new Marker({ element: el }).setLngLat(r.coord).addTo(map));
       }
     }
   }, [props.reports]);
