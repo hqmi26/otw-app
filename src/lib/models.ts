@@ -1,5 +1,6 @@
 import type { Place } from './api';
 import type { LngLat } from './geo';
+import type { PlaceGroup } from './places';
 
 /** Shown in Account → About and added to feedback emails. */
 export const APP_VERSION = '0.3 · family test';
@@ -16,6 +17,30 @@ export interface SavedPlace {
   label: string;
   kind: SavedKind;
   place: Place;
+}
+
+/** A place the user added because search couldn't find it. Kept on this phone for now. */
+export interface MyPlace {
+  id: string;
+  name: string;
+  group: PlaceGroup;
+  coord: LngLat;
+  /** ms since epoch */
+  at: number;
+}
+
+/** Kinds offered when adding a missing place, in order. */
+export const MY_PLACE_KINDS: { group: PlaceGroup; label: string }[] = [
+  { group: 'surau', label: 'Surau / masjid' },
+  { group: 'food', label: 'Food' },
+  { group: 'shop', label: 'Shop' },
+  { group: 'fuel', label: 'Petrol' },
+  { group: '', label: 'Other' },
+];
+
+export function myPlaceToPlace(p: MyPlace): Place {
+  const kind = MY_PLACE_KINDS.find((k) => k.group === p.group)?.label ?? 'Place';
+  return { id: p.id, name: p.name, subtitle: `${kind} · Added by you`, coord: p.coord };
 }
 
 /** The labels offered when saving a place, in order. */

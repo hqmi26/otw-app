@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import { CATEGORIES, searchPlaces, type Place } from '../lib/api';
+import { CATEGORIES, type Place } from '../lib/api';
 import { distance, formatDistance, type LngLat } from '../lib/geo';
-import type { SavedPlace } from '../lib/models';
+import type { MyPlace, SavedPlace } from '../lib/models';
+import { findPlaces } from '../lib/search';
 import { SavedIcon } from './brand';
-import { BackIcon, ClockIcon, PinIcon, SearchIcon } from './icons';
+import { BackIcon, ClockIcon, PinIcon, PlusIcon, SearchIcon } from './icons';
 
 /** What the picked place is for: a trip, saving it (the "Add" chip), or a stop on the way. */
 export type SearchPurpose = 'go' | 'save' | 'stop';
@@ -18,9 +19,13 @@ interface Props {
   position: LngLat | null;
   recents: Place[];
   saved: SavedPlace[];
+  /** Places the user added themselves; searched first. */
+  myPlaces: MyPlace[];
   purpose: SearchPurpose;
   leaving: 'pop' | 'fade' | null;
   onPick: (place: Place) => void;
+  /** "Can't find it?" – put a missing place on the map. */
+  onAddMissing: () => void;
   onBack: () => void;
 }
 
@@ -28,13 +33,25 @@ type Status = 'idle' | 'loading' | 'done' | 'error';
 type Category = (typeof CATEGORIES)[number];
 
 /** Search (design screen 2). */
-export default function SearchScreen({ position, recents, saved, purpose, leaving, onPick, onBack }: Props) {
+export default function SearchScreen({
+  position,
+  recents,
+  saved,
+  myPlaces,
+  purpose,
+  leaving,
+  onPick,
+  onAddMissing,
+  onBack,
+}: Props) {
   const [query, setQuery] = useState('');
   const [category, setCategory] = useState<Category | null>(null);
   const [results, setResults] = useState<Place[]>([]);
   const [status, setStatus] = useState<Status>('idle');
   const near = useRef(position);
   near.current = position;
+  const mine = useRef(myPlaces);
+  mine.current = myPlaces;
   const input = useRef<HTMLInputElement>(null);
 
   // Let the slide-in finish before the keyboard opens; doing both at once
@@ -66,7 +83,16 @@ export default function SearchScreen({ position, recents, saved, purpose, leavin
     setStatus('loading');
     const timer = window.setTimeout(
       () => {
-        searchPlaces(q, near.current, ctrl.signal, category?.osmTag)
+        findPlaces({
+          query: q,
+          category,
+          near: near.current,
+          mine: mine.current,
+          signal: ctrl.signal,
+          onFirst: (list) => {
+            if (!ctrl.signal.aborted) setResults(list);
+          },
+        })
           .then((list) => {
             setResults(list);
             setStatus('done');
@@ -75,13 +101,15 @@ export default function SearchScreen({ position, recents, saved, purpose, leavin
             if ((e as Error).name !== 'AbortError') setStatus('error');
           });
       },
-      category ? 0 : 300,
+      // Sabah is searched on the phone, so a short pause is enough.
+      category ? 0 : 200,
     );
     return () => {
       window.clearTimeout(timer);
       ctrl.abort();
     };
-  }, [query, category]);
+    // myPlaces: search again after the user adds or removes one of their own places.
+  }, [query, category, myPlaces]);
 
   const searching = category != null || query.trim().length >= 2;
   const distanceTo = (place: Place) =>
@@ -151,6 +179,17 @@ export default function SearchScreen({ position, recents, saved, purpose, leavin
                   {distanceTo(place)}
                 </button>
               ))}
+              {status === 'done' && purpose === 'go' && (
+                <button type="button" className="row" onClick={onAddMissing}>
+                  <span className="row-icon">
+                    <PlusIcon size={20} />
+                  </span>
+                  <span className="row-text">
+                    <span className="row-title accent">Can’t find it? Add a missing place</span>
+                    <span className="row-sub">Put it on the map yourself – it shows up straight away</span>
+                  </span>
+                </button>
+              )}
             </div>
           </>
         ) : (
