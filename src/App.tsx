@@ -465,7 +465,7 @@ export default function App() {
     setRerouting(true);
     // Still on the way to the stop: the new route goes through it too.
     const via = shownStop && distance(realPos, shownStop.coord) > AT_STOP_M ? shownStop : null;
-    getRoutes(realPos, destination.coord, undefined, via)
+    getRoutes(realPos, destination.coord, undefined, via, false)
       .then((list) => {
         spoken.current.clear();
         pace.current = null;

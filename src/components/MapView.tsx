@@ -106,7 +106,13 @@ function addRouteLayers(map: MapLibreMap, theme: Theme) {
   const layers = map.getStyle().layers ?? [];
   const lastRoad = layers.reduce((last, l, i) => (l.type === 'line' ? i : last), -1);
   const firstLabel = layers.slice(lastRoad + 1).find((l) => l.type === 'symbol')?.id;
-  map.addSource(SOURCE, { type: 'geojson', data: routeData(null, 0, 'browse') });
+  map.addSource(SOURCE, {
+    type: 'geojson',
+    data: routeData(null, 0, 'browse'),
+    // The FOSSGIS route server asks for this credit and a "fix the map" link.
+    attribution:
+      'Routes <a href="https://valhalla1.openstreetmap.de" target="_blank">FOSSGIS Valhalla</a>, <a href="https://project-osrm.org" target="_blank">OSRM</a> · <a href="https://www.openstreetmap.org/fixthemap" target="_blank">Fix the map</a>',
+  });
   map.addLayer(
     {
       id: CASING_LAYER,

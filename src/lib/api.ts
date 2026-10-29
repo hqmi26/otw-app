@@ -4,11 +4,14 @@ import type { PlaceGroup } from './places';
 /*
  * Free public services, no API keys:
  *  - Photon (komoot) for place search outside Sabah (Sabah is searched on the phone, see places.ts)
- *  - OSRM demo server for driving routes
- * Both are fine for family testing. For a public launch, self-host them on a
- * server in Malaysia (see README) so nobody's location leaves the country.
+ *  - Valhalla (FOSSGIS) for driving routes: it offers 2–3 different routes, where
+ *    the OSRM demo server finds only one in KK. OSRM stays as the backup.
+ * All are fine for family testing (Valhalla allows one request a second). For a
+ * public launch, self-host them on a server in Malaysia (see README) so nobody's
+ * location leaves the country.
  */
 const PHOTON_URL = 'https://photon.komoot.io/api/';
+const VALHALLA_URL = 'https://valhalla1.openstreetmap.de/route';
 const OSRM_URL = 'https://router.project-osrm.org/route/v1/driving/';
 const MALAYSIA_BBOX = '99.6,0.85,119.3,7.4';
 
@@ -128,42 +131,96 @@ interface OsrmRoute {
   legs: { summary: string; steps: OsrmStep[] }[];
 }
 
-/** The main roads of the whole trip, e.g. "Jalan Lintas, Jalan Tuaran". */
+/** The main roads of the whole trip, e.g. "Jalan Lintas, Jalan Tuaran". Bare route numbers ("1") are left out. */
 function mainRoads(legs: OsrmRoute['legs']): string {
-  const names = legs.flatMap((leg) => leg.summary.split(', ')).filter(Boolean);
+  const names = legs.flatMap((leg) => leg.summary.split(', ')).filter((n) => /[a-z]/i.test(n));
   return [...new Set(names)].slice(0, 2).join(', ');
 }
 
-/** Driving routes, best first. With a stop the route goes through it (and there's only one route). */
-export async function getRoutes(from: LngLat, to: LngLat, signal?: AbortSignal, stop?: Place | null): Promise<Route[]> {
-  const points = stop ? [from, stop.coord, to] : [from, to];
+type OsrmAnswer = { code: string; routes?: OsrmRoute[] };
+
+/** Valhalla, asked to answer in OSRM's format. `choices`: also look for other routes. */
+async function valhalla(points: LngLat[], choices: boolean, signal?: AbortSignal): Promise<OsrmAnswer> {
+  const json = JSON.stringify({
+    locations: points.map(([lon, lat]) => ({ lon, lat })),
+    costing: 'auto',
+    ...(choices && { alternates: 2 }),
+    format: 'osrm',
+    shape_format: 'geojson',
+  });
+  // A GET with the request in the address needs no CORS preflight.
+  const res = await fetch(`${VALHALLA_URL}?${new URLSearchParams({ json })}`, { signal });
+  const data = (await res.json()) as OsrmAnswer;
+  if (res.status === 400 && (data.code === 'NoRoute' || data.code === 'NoSegment')) throw new Error('No route found');
+  if (!res.ok) throw new Error(`Routing failed (${res.status})`);
+  return data;
+}
+
+async function osrm(points: LngLat[], signal?: AbortSignal): Promise<OsrmAnswer> {
   const url =
     OSRM_URL +
     points.map((c) => `${c[0]},${c[1]}`).join(';') +
     '?overview=full&geometries=geojson&alternatives=true&steps=true';
   const res = await fetch(url, { signal });
   if (!res.ok) throw new Error(`Routing failed (${res.status})`);
-  const data = (await res.json()) as { code: string; routes?: OsrmRoute[] };
+  return (await res.json()) as OsrmAnswer;
+}
+
+/**
+ * Driving routes, best first: up to three to choose from. With a stop the route
+ * goes through it (and there's only one route). `choices: false` for a reroute,
+ * which only needs the best one.
+ */
+export async function getRoutes(
+  from: LngLat,
+  to: LngLat,
+  signal?: AbortSignal,
+  stop?: Place | null,
+  choices = true,
+): Promise<Route[]> {
+  const points = stop ? [from, stop.coord, to] : [from, to];
+  let data: OsrmAnswer;
+  try {
+    data = await valhalla(points, choices && !stop, signal);
+  } catch (e) {
+    const err = e as Error;
+    if (err.name === 'AbortError' || err.message === 'No route found') throw err;
+    data = await osrm(points, signal); // Valhalla is down or busy
+  }
   if (data.code !== 'Ok' || !data.routes?.length) throw new Error('No route found');
 
-  return data.routes.slice(0, 2).map((r) => ({
+  return data.routes.slice(0, 3).map((r) => ({
     coords: r.geometry.coordinates,
     distance: r.distance,
     duration: r.duration,
     via: mainRoads(r.legs),
-    steps: r.legs.flatMap((leg, legIndex) =>
-      leg.steps.map((s) => {
-        // Every leg but the last ends at the stop: "Stop at …", not "You have arrived".
-        const atStop = stop != null && legIndex < r.legs.length - 1 && s.maneuver.type === 'arrive';
-        return {
-          type: atStop ? 'stop' : s.maneuver.type,
-          modifier: s.maneuver.modifier,
-          exit: s.maneuver.exit,
-          road: atStop ? stop.name : s.name || s.ref || '',
-          location: s.maneuver.location,
-          distance: s.distance,
-        };
-      }),
-    ),
+    steps: toSteps(r, stop),
   }));
+}
+
+function toSteps(r: OsrmRoute, stop?: Place | null): RouteStep[] {
+  const steps: RouteStep[] = [];
+  r.legs.forEach((leg, legIndex) => {
+    for (const s of leg.steps) {
+      const type = s.maneuver.type;
+      // Valhalla adds a step for leaving a roundabout. The roundabout step already
+      // says which exit to take, so it just runs on to the next turn.
+      const prev = steps[steps.length - 1];
+      if (prev && (type === 'exit roundabout' || type === 'exit rotary')) {
+        prev.distance += s.distance;
+        continue;
+      }
+      // Every leg but the last ends at the stop: "Stop at …", not "You have arrived".
+      const atStop = stop != null && legIndex < r.legs.length - 1 && type === 'arrive';
+      steps.push({
+        type: atStop ? 'stop' : type,
+        modifier: s.maneuver.modifier,
+        exit: s.maneuver.exit,
+        road: atStop ? stop.name : s.name || s.ref || '',
+        location: s.maneuver.location,
+        distance: s.distance,
+      });
+    }
+  });
+  return steps;
 }

@@ -16,7 +16,7 @@ Matches the design canvas ("OTW – Family Navigation App"):
 - Sabah's places as coloured labels on the map (tap one for directions)
 - "Add a missing place": put a place search can't find on the map yourself (on this phone for now)
 - Save any place with the ⭐ on the route sheet or the "Add" chip
-- Directions with up to two routes, ETA and arrival time (OSRM)
+- Directions with up to three routes to choose from, ETA and arrival time (Valhalla, OSRM as backup)
 - Turn-by-turn: next turn, "then…" hint, voice, mute, rerouting, screen stays on
 - Report a hazard (pinned on the map for 2 hours, on this phone only for now)
 - Account: change username, dark mode switch, log out
@@ -102,11 +102,13 @@ OpenStreetMap's is ODbL; the map credit names both.
 | Map tiles | OpenFreeMap (OpenStreetMap data) | Free, no limits |
 | Search in Sabah | Our own list (`public/places/sabah.json`) | Searched on the phone |
 | Search elsewhere | Photon public server | Fair use only |
-| Routing | OSRM demo server | Demo use only |
+| Routing | FOSSGIS Valhalla server (OSRM demo server as backup) | Low use only, one request a second. Gives 2–3 routes; OSRM finds only one in KK |
 | Feedback | Cloudflare Pages Functions + D1 | Free tier, plenty for feedback |
 
-For a public launch, run Photon and OSRM on our own server in Malaysia so
-nobody's location leaves the country.
+For a public launch, run Photon and Valhalla on our own server in Malaysia so
+nobody's location leaves the country. None of these know about live traffic:
+the route times are for normal roads, with a rough rush-hour allowance
+(`src/lib/eta.ts`). Choosing the route with less jam needs live traffic (TomTom).
 
 ## Code map
 
