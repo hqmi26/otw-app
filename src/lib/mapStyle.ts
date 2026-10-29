@@ -1,5 +1,7 @@
-import type { ExpressionSpecification, StyleSpecification } from 'maplibre-gl';
+import type { MultiPolygon, Polygon } from 'geojson';
+import type { ExpressionSpecification, FilterSpecification, StyleSpecification } from 'maplibre-gl';
 import type { Theme } from '../hooks/useTheme';
+import type { PlaceGroup } from './places';
 
 /*
  * OTW's own map style, drawn from OpenFreeMap's free OpenStreetMap tiles.
@@ -76,6 +78,44 @@ const PALETTES: Record<Theme, Palette> = {
     halo: '#1B2220',
   },
 };
+
+/** Text colour of our own place labels (places.ts) by kind, so a surau or petrol station stands out. */
+export const PLACE_COLORS: Record<Theme, Record<PlaceGroup | 'mine', string>> = {
+  light: {
+    surau: '#0A6B5C',
+    food: '#A4501C',
+    fuel: '#2563A8',
+    parking: '#2563A8',
+    shop: '#7445A8',
+    area: '#5B6763',
+    street: '#5B6763',
+    '': '#5B6763',
+    mine: '#15201D',
+  },
+  dark: {
+    surau: '#5FD0BC',
+    food: '#F0A36B',
+    fuel: '#7FB2EA',
+    parking: '#7FB2EA',
+    shop: '#C3A2EE',
+    area: '#9AA7A2',
+    street: '#9AA7A2',
+    '': '#9AA7A2',
+    mine: '#FFFFFF',
+  },
+};
+
+export function labelHalo(theme: Theme): string {
+  return PALETTES[theme].halo;
+}
+
+export const POI_LABEL_LAYER = 'poi-label';
+
+/** OpenFreeMap's own shop/place labels; hidden inside `ownArea`, where our fuller list draws its own. */
+export function poiLabelFilter(ownArea?: Polygon | MultiPolygon): FilterSpecification {
+  const rank: FilterSpecification = ['<=', ['get', 'rank'], 12];
+  return ownArea ? ['all', rank, ['!', ['within', ownArea]]] : rank;
+}
 
 const FONT_REGULAR = ['Noto Sans Regular'];
 const FONT_BOLD = ['Noto Sans Bold'];
@@ -312,12 +352,12 @@ export function buildMapStyle(theme: Theme): StyleSpecification {
         paint: { 'text-color': p.roadText, 'text-halo-color': p.halo, 'text-halo-width': 1.6 },
       },
       {
-        id: 'poi-label',
+        id: POI_LABEL_LAYER,
         type: 'symbol',
         source: 'omt',
         'source-layer': 'poi',
         minzoom: 15,
-        filter: ['<=', ['get', 'rank'], 12],
+        filter: poiLabelFilter(),
         layout: {
           'text-field': NAME,
           'text-font': FONT_REGULAR,

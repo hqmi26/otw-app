@@ -18,12 +18,12 @@ const FLOWS: Flow[] = [
   {
     icon: <CarIcon size={20} />,
     title: 'Directions',
-    text: 'Your start, stop and destination go to the free OSRM route service (Germany) to work out the route.',
+    text: 'Your start, stop and destination go to the free Valhalla route service (Germany), or to OSRM (Germany) if Valhalla is busy, to work out the route.',
   },
   {
     icon: <SearchIcon size={20} />,
     title: 'Search',
-    text: 'What you type, and roughly where you are, go to Photon (Germany) so nearby places come first. A dropped pin goes there too, to find its name.',
+    text: 'Places in Sabah are found on your phone. What you type, and roughly where you are, also go to Photon (Germany) to find places in the rest of Malaysia. A dropped pin outside Sabah goes there too, to find its name.',
   },
   {
     icon: <PinIcon size={20} />,

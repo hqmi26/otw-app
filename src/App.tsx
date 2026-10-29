@@ -15,8 +15,11 @@ import ReportSheet from './components/ReportSheet';
 import SavePlaceSheet from './components/SavePlaceSheet';
 import StepsSheet from './components/StepsSheet';
 import FeedbackSheet from './components/FeedbackSheet';
+import AddPlaceSheet from './components/AddPlaceSheet';
 import { CheckIcon } from './components/icons';
-import { getRoutes, reverseGeocode, type Place, type Route } from './lib/api';
+import { getRoutes, type Place, type Route } from './lib/api';
+import { loadPlaces, type PlaceGroup, type PlacesIndex } from './lib/places';
+import { whatIsHere } from './lib/search';
 import {
   bearing,
   cumulative,
@@ -34,6 +37,7 @@ import {
   reportLifetime,
   type HazardReport,
   type HazardType,
+  type MyPlace,
   type Profile,
   type SavedKind,
   type SavedPlace,
@@ -62,7 +66,8 @@ type Screen =
   | 'report'
   | 'save'
   | 'steps'
-  | 'feedback';
+  | 'feedback'
+  | 'addplace';
 /** Screens that open as a sheet over whatever is underneath. */
 const MODALS: Screen[] = ['report', 'save', 'steps', 'feedback'];
 /** Full-screen pages opened from home; home stays mounted underneath them. */
@@ -103,6 +108,8 @@ export default function App() {
   const [profile, setProfile] = useStored<Profile | null>('otw-profile', null, (v) => v == null || typeof v === 'object');
   const [saved, setSaved] = useStored<SavedPlace[]>('otw-saved', [], isArray);
   const [reports, setReports] = useStored<HazardReport[]>('otw-reports', [], isArray);
+  /** Places the user added because search couldn't find them (on this phone until accounts exist). */
+  const [myPlaces, setMyPlaces] = useStored<MyPlace[]>('otw-my-places', [], isArray);
   /** Language for turn instructions and voice (Account → Voice directions). */
   const [lang, setLang] = useStored<Lang>('otw-voice-lang', 'en', (v) => v === 'en' || v === 'ms');
 
@@ -181,6 +188,25 @@ export default function App() {
   const [stop, setStop] = useState<Place | null>(null);
   /** Family see the car move on this trip. Set before Start; off again after every trip. */
   const [shareLive, setShareLive] = useState(false);
+  const [pickStart, setPickStart] = useState<LngLat | null>(null);
+  const pickRef = useRef<(() => LngLat | null) | null>(null);
+
+  // Sabah's place list for the map labels. Fetched after the app has opened so
+  // it doesn't hold up the first map tiles; tried again on the next screen change if offline.
+  const [places, setPlaces] = useState<PlacesIndex | null>(null);
+  useEffect(() => {
+    if (phase !== 'app' || places) return;
+    let alive = true;
+    const t = window.setTimeout(() => {
+      loadPlaces().then((ix) => {
+        if (alive && ix) setPlaces(ix);
+      });
+    }, 800);
+    return () => {
+      alive = false;
+      window.clearTimeout(t);
+    };
+  }, [phase, places, base]);
 
   const realPos = geo.fix?.coord ?? null;
   const origin = realPos ?? (FORCE_SIM ? DEMO_START : null);
@@ -244,7 +270,7 @@ export default function App() {
     };
     openRoute(pin, false);
     // Then find out what's there and name the pin after it.
-    reverseGeocode(coord)
+    whatIsHere(coord, myPlaces)
       .then((found) => {
         if (!found) return;
         const named = { ...pin, name: found.name, subtitle: found.subtitle };
@@ -320,6 +346,24 @@ export default function App() {
     back();
   };
   const savedAs = destination ? (saved.find((s) => s.place.id === destination.id)?.label ?? null) : null;
+
+  // --- Missing places the user adds themselves ---
+  const openAddPlace = (start: LngLat | null) => {
+    setPickStart(start);
+    go('addplace');
+  };
+  const addMyPlace = (name: string, group: PlaceGroup) => {
+    const coord = pickRef.current?.();
+    if (!coord) return;
+    setMyPlaces((list) => [...list, { id: `mine:${Date.now()}`, name, group, coord, at: Date.now() }]);
+    showToast(`Added ${name} – search finds it now`);
+    backTo(0);
+  };
+  const removeMyPlace = (id: string) => {
+    setMyPlaces((list) => list.filter((p) => p.id !== id));
+    showToast('Place removed');
+    back();
+  };
 
   // --- Send ETA: opens WhatsApp with the message ready, and the driver picks the chat. ---
   const sendEta = (secondsLeft: number) => {
@@ -468,7 +512,7 @@ export default function App() {
     setRerouting(true);
     // Still on the way to the stop: the new route goes through it too.
     const via = shownStop && distance(realPos, shownStop.coord) > AT_STOP_M ? shownStop : null;
-    getRoutes(realPos, destination.coord, undefined, via)
+    getRoutes(realPos, destination.coord, undefined, via, false)
       .then((list) => {
         spoken.current.clear();
         pace.current = null;
@@ -602,7 +646,8 @@ export default function App() {
   const stepsView = usePresence(phase === 'app' && top === 'steps' && stepsRoute != null, 250);
   const feedbackView = usePresence(phase === 'app' && top === 'feedback', 250);
 
-  const mapMode: MapMode = base === 'nav' ? 'nav' : base === 'route' ? 'preview' : 'browse';
+  const mapMode: MapMode =
+    base === 'nav' ? 'nav' : base === 'route' ? 'preview' : base === 'addplace' ? 'pick' : 'browse';
   const baseInsets = INSETS[base] ?? NO_INSETS;
   // The "Share live trip" row makes the route sheet taller.
   const insets = base === 'route' && canShare ? { top: baseInsets.top, bottom: baseInsets.bottom + 60 } : baseInsets;
@@ -635,6 +680,13 @@ export default function App() {
           setOverview(null); // looking around: stay put until Re-centre
         }}
         onLongPress={dropPin}
+        places={places}
+        myPlaces={myPlaces}
+        onPickPlace={(place) => {
+          if (base === 'home') openRoute(place);
+        }}
+        pickStart={pickStart}
+        pickRef={pickRef}
       />
 
       {phase === 'app' && profile && !locationReady && <LocationScreen problem={geo.problem} onRetry={geo.retry} />}
@@ -696,9 +748,13 @@ export default function App() {
                 setPlaceToSave(destination);
                 go('save');
               }}
+              onAddMissing={destination.id.startsWith('pin:') ? () => openAddPlace(destination.coord) : undefined}
+              onRemoveMine={destination.id.startsWith('mine:') ? () => removeMyPlace(destination.id) : undefined}
               onBack={back}
             />
           )}
+
+          {base === 'addplace' && <AddPlaceSheet onSave={addMyPlace} onBack={back} />}
 
           {base === 'nav' && activeRoute && destination && (
             <NavigationView
@@ -732,9 +788,11 @@ export default function App() {
               position={realPos}
               recents={recents}
               saved={saved}
+              myPlaces={myPlaces}
               purpose={searchPurpose}
               leaving={searchView.leaving ? leaveStyle : null}
               onPick={pickFromSearch}
+              onAddMissing={() => openAddPlace(realPos)}
               onBack={back}
             />
           )}

@@ -25,6 +25,10 @@ interface Props {
   onShowSteps: () => void;
   onAddStop: () => void;
   onRemoveStop: () => void;
+  /** For a dropped pin: turn it into a named place search can find. */
+  onAddMissing?: () => void;
+  /** For a place the user added: take it off the map again. */
+  onRemoveMine?: () => void;
   onBack: () => void;
 }
 
@@ -57,6 +61,16 @@ export default function RouteSheet(p: Props) {
             <StarIcon size={22} filled={!!p.savedAs} />
           </button>
         </div>
+        {p.onAddMissing && (
+          <button type="button" className="text-btn inline-link" onClick={p.onAddMissing}>
+            + Add this as a missing place
+          </button>
+        )}
+        {p.onRemoveMine && (
+          <button type="button" className="text-btn inline-link danger" onClick={p.onRemoveMine}>
+            Remove this place
+          </button>
+        )}
 
         {p.stop ? (
           <div className="stop-row">
