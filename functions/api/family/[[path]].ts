@@ -9,6 +9,10 @@
  *
  * Joining is by invite link with just a name. The phone keeps a secret token;
  * only its SHA-256 is stored here.
+ *
+ * Hazard reports (flood, accident…) are about the road, not the person: they
+ * go to the family for 2 hours, then they're deleted. Who sent one is never
+ * stored, so they also go out while someone is on Private.
  */
 
 // Just the parts of Cloudflare's D1 API used here, so no extra type package is needed.
@@ -58,6 +62,15 @@ interface FamilyRow {
   invite_expires_at: number;
 }
 
+interface ReportRow {
+  id: string;
+  type: string;
+  lat: number;
+  lng: number;
+  note: string | null;
+  created_at: number;
+}
+
 const MAX_MEMBERS = 10;
 const INVITE_DAYS = 7;
 /** The moving car disappears if the phone stops sending for this long (app closed, no signal). */
@@ -66,6 +79,11 @@ const LIVE_STALE_S = 3 * 60;
 const TRIP_STALE_S = 30 * 60;
 /** No 0/O or 1/I, so the code is easy to read out. */
 const CODE_LETTERS = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+/** Same list and lifetime as the app (src/lib/models.ts). */
+const HAZARD_TYPES = ['accident', 'jam', 'flood', 'roadblock', 'hazard', 'pothole'];
+const REPORT_LIFETIME_S = 2 * 60 * 60;
+/** More live reports than this in one family is a stuck button, not real roads. */
+const MAX_REPORTS = 50;
 
 /** Same tables as db/family.sql, made once per server instance so a new database needs no setup. */
 const SCHEMA = [
@@ -77,6 +95,10 @@ const SCHEMA = [
     private INTEGER NOT NULL DEFAULT 0, area TEXT, area_lat REAL, area_lng REAL, area_since INTEGER,
     trip_to TEXT, trip_eta INTEGER, live_lat REAL, live_lng REAL, live_heading REAL, live_at INTEGER)`,
   `CREATE INDEX IF NOT EXISTS members_by_family ON members (family_id)`,
+  `CREATE TABLE IF NOT EXISTS reports (id TEXT PRIMARY KEY,
+    family_id TEXT NOT NULL REFERENCES families(id) ON DELETE CASCADE,
+    type TEXT NOT NULL, lat REAL NOT NULL, lng REAL NOT NULL, note TEXT, created_at INTEGER NOT NULL)`,
+  `CREATE INDEX IF NOT EXISTS reports_by_family ON reports (family_id)`,
 ];
 let tablesReady: Promise<unknown> | null = null;
 
@@ -187,15 +209,28 @@ async function familyView(db: D1Database, me: MemberRow) {
         'UPDATE members SET trip_to = NULL, trip_eta = NULL, live_lat = NULL, live_lng = NULL, live_heading = NULL, live_at = NULL WHERE family_id = ? AND trip_eta < ?',
       )
       .bind(me.family_id, t - TRIP_STALE_S),
+    db.prepare('DELETE FROM reports WHERE family_id = ? AND created_at < ?').bind(me.family_id, t - REPORT_LIFETIME_S),
   ]);
   const family = await db.prepare('SELECT * FROM families WHERE id = ?').bind(me.family_id).first<FamilyRow>();
   const { results } = await db
     .prepare('SELECT * FROM members WHERE family_id = ? ORDER BY joined_at')
     .bind(me.family_id)
     .all<MemberRow>();
+  const reports = await db
+    .prepare('SELECT * FROM reports WHERE family_id = ? ORDER BY created_at')
+    .bind(me.family_id)
+    .all<ReportRow>();
   return {
     me: me.id,
     invite: family ? { code: family.invite_code, expiresAt: family.invite_expires_at } : null,
+    reports: reports.results.map((r) => ({
+      id: r.id,
+      type: r.type,
+      lat: r.lat,
+      lng: r.lng,
+      note: r.note ?? '',
+      at: r.created_at,
+    })),
     members: results.map((m) => ({
       id: m.id,
       name: m.name,
@@ -372,6 +407,24 @@ async function handle(db: D1Database, method: string, path: string[], request: R
   if (method === 'POST' && action === 'me') {
     const updated = await updateMe(db, me, await readJson(request));
     return reply(200, await familyView(db, updated));
+  }
+  // A hazard on the road, pinned where the phone was. Nothing says who sent it.
+  if (method === 'POST' && action === 'report') {
+    const data = await readJson(request);
+    const type = text(data.type, 20);
+    const lat = num(data.lat, -90, 90);
+    const lng = num(data.lng, -180, 180);
+    if (!HAZARD_TYPES.includes(type) || lat == null || lng == null) throw new HttpError(400, 'Missing hazard or place');
+    const count = await db
+      .prepare('SELECT COUNT(*) AS n FROM reports WHERE family_id = ? AND created_at >= ?')
+      .bind(me.family_id, now() - REPORT_LIFETIME_S)
+      .first<{ n: number }>();
+    if ((count?.n ?? 0) >= MAX_REPORTS) throw new HttpError(429, 'Too many reports right now. Try again later');
+    await db
+      .prepare('INSERT INTO reports (id, family_id, type, lat, lng, note, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .bind(crypto.randomUUID(), me.family_id, type, round(lat, 5), round(lng, 5), text(data.note, 80) || null, now())
+      .run();
+    return reply(201, await familyView(db, me));
   }
   if (method === 'POST' && action === 'new-link') {
     await newInvite(db, me.family_id);

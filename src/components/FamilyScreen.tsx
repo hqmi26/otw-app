@@ -195,7 +195,7 @@ export default function FamilyScreen(p: Props) {
             <p className="privacy-note">
               <LockIcon size={18} />
               {me.private
-                ? 'You are private. Family can’t see your area or ETA.'
+                ? 'You are private. Family can’t see your area or ETA. Hazard reports still reach them, with no name.'
                 : 'Family only see the area, never the exact spot. Your car shows only when you share a live trip.'}
             </p>
 

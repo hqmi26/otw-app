@@ -42,3 +42,17 @@ CREATE TABLE IF NOT EXISTS members (
 );
 
 CREATE INDEX IF NOT EXISTS members_by_family ON members (family_id);
+
+-- Hazard reports (flood, accident…) the family sees on the map, deleted after
+-- 2 hours. Who sent a report is never stored, so they also go out on Private.
+CREATE TABLE IF NOT EXISTS reports (
+  id TEXT PRIMARY KEY,
+  family_id TEXT NOT NULL REFERENCES families(id) ON DELETE CASCADE,
+  type TEXT NOT NULL,                  -- accident, jam, flood, roadblock, hazard or pothole
+  lat REAL NOT NULL,
+  lng REAL NOT NULL,
+  note TEXT,                           -- up to 80 letters, e.g. "left lane flooded"
+  created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS reports_by_family ON reports (family_id);

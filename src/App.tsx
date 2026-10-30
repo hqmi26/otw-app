@@ -102,6 +102,8 @@ export default function App() {
     [],
   );
   const family = useFamily(phase === 'app' && profile != null);
+  /** In a family and not on Private: your area and ETA go to the family. */
+  const canShare = family.me != null && !family.me.private;
 
   // --- Screens. Kept in browser history so the phone's back gesture works. ---
   const [stack, setStack] = useState<Screen[]>(['home']);
@@ -451,20 +453,39 @@ export default function App() {
     };
   }, [base]);
 
-  // --- Hazard reports (on this phone until family sharing exists) ---
+  // --- Hazard reports: shared with the family with no name on them, even on
+  // Private, or kept on this phone when not in a family (or offline). ---
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const id = window.setInterval(() => setNow(Date.now()), 60000);
     return () => window.clearInterval(id);
   }, []);
-  const liveReports = useMemo(() => reports.filter((r) => now - r.at < REPORT_LIFETIME_MS), [reports, now]);
+  const liveReports = useMemo(() => {
+    const fromFamily: HazardReport[] = (family.state?.reports ?? [])
+      .filter((r) => HAZARDS.some((h) => h.type === r.type))
+      .map((r) => ({ id: `family:${r.id}`, type: r.type as HazardType, coord: [r.lng, r.lat], note: r.note, at: r.at * 1000 }));
+    return [...reports, ...fromFamily].filter((r) => now - r.at < REPORT_LIFETIME_MS);
+  }, [reports, family.state, now]);
   const reportPos = base === 'nav' ? shownNavPos : realPos;
   const sendReport = (type: HazardType, note: string) => {
     if (!reportPos) return;
-    const report: HazardReport = { id: `${Date.now()}`, type, coord: reportPos, note, at: Date.now() };
-    setReports((list) => [...list.filter((r) => Date.now() - r.at < REPORT_LIFETIME_MS), report]);
     const label = HAZARDS.find((h) => h.type === type)!.label;
-    showToast(`${label} reported`);
+    const keepOnPhone = () => {
+      const report: HazardReport = { id: `${Date.now()}`, type, coord: reportPos, note, at: Date.now() };
+      setReports((list) => [...list.filter((r) => Date.now() - r.at < REPORT_LIFETIME_MS), report]);
+    };
+    if (family.me) {
+      family
+        .report({ type, lat: reportPos[1], lng: reportPos[0], note })
+        .then(() => showToast(`${label} reported to your family`))
+        .catch(() => {
+          keepOnPhone();
+          showToast(`${label} saved on this phone only. Family couldn’t be reached`);
+        });
+    } else {
+      keepOnPhone();
+      showToast(`${label} reported`);
+    }
     back();
   };
 
@@ -495,7 +516,6 @@ export default function App() {
 
   // --- Family sharing: your area always, the trip ETA while driving, and the
   // moving car only when "Share live trip" was switched on for this trip. ---
-  const canShare = family.me != null && !family.me.private;
   const myArea = useArea(phase === 'app' && family.inFamily ? realPos : null);
   // A demo drive (no GPS) isn't real, so family don't see it, unless testing with ?sim.
   const tripShare =
@@ -759,6 +779,7 @@ export default function App() {
           {reportView.mounted && (
             <ReportSheet
               hasLocation={reportPos != null}
+              sharedWithFamily={family.me != null}
               leaving={reportView.leaving}
               onSend={sendReport}
               onClose={back}

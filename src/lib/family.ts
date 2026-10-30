@@ -27,11 +27,22 @@ export interface FamilyMember {
   live: { lat: number; lng: number; heading: number | null; at: number | null } | null;
 }
 
+/** A hazard someone in the family reported, with no name on it; at is unix seconds. Gone after 2 hours. */
+export interface FamilyReport {
+  id: string;
+  type: string;
+  lat: number;
+  lng: number;
+  note: string;
+  at: number;
+}
+
 export interface FamilyState {
   /** Your own member id. */
   me: string;
   invite: { code: string; expiresAt: number } | null;
   members: FamilyMember[];
+  reports: FamilyReport[];
 }
 
 export interface FamilyPatch {
@@ -86,6 +97,8 @@ export const familyApi = {
   join: (code: string, name: string, token: string | null) => call<Joined>('join', token, { code, name }),
   state: (token: string) => call<FamilyState>('state', token),
   update: (token: string, patch: FamilyPatch) => call<FamilyState>('me', token, patch),
+  report: (token: string, report: { type: string; lat: number; lng: number; note: string }) =>
+    call<FamilyState>('report', token, report),
   newLink: (token: string) => call<FamilyState>('new-link', token, {}),
   leave: (token: string) => call<{ ok: true }>('leave', token, {}),
 };

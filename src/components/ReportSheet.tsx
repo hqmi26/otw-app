@@ -1,17 +1,19 @@
 import { useState } from 'react';
 import { HAZARDS, type HazardType } from '../lib/models';
 import { HazardIcon } from './brand';
-import { LockIcon } from './icons';
+import { LockIcon, UsersIcon } from './icons';
 
 interface Props {
   hasLocation: boolean;
+  /** In a family, so the report goes to them. Otherwise it stays on this phone. */
+  sharedWithFamily: boolean;
   leaving: boolean;
   onSend: (type: HazardType, note: string) => void;
   onClose: () => void;
 }
 
-/** Report a hazard (design screen 6). Saved on this phone until family sharing exists. */
-export default function ReportSheet({ hasLocation, leaving, onSend, onClose }: Props) {
+/** Report a hazard (design screen 6). Shared with the family with no name, or kept on this phone. */
+export default function ReportSheet({ hasLocation, sharedWithFamily, leaving, onSend, onClose }: Props) {
   const [type, setType] = useState<HazardType>('flood');
   const [note, setNote] = useState('');
   const label = HAZARDS.find((h) => h.type === type)!.label.toLowerCase();
@@ -57,8 +59,10 @@ export default function ReportSheet({ hasLocation, leaving, onSend, onClose }: P
         />
 
         <p className="privacy-note">
-          <LockIcon size={18} />
-          Saved on this phone for now · clears after 2 hours
+          {sharedWithFamily ? <UsersIcon size={18} /> : <LockIcon size={18} />}
+          {sharedWithFamily
+            ? 'Your family sees it on their map, with no name · clears after 2 hours'
+            : 'Saved on this phone · clears after 2 hours. Start a family to share reports'}
         </p>
 
         <button type="button" className="report-send" disabled={!hasLocation} onClick={() => onSend(type, note.trim())}>

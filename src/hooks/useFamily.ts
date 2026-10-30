@@ -98,6 +98,15 @@ export function useFamily(enabled: boolean) {
     [guard],
   );
 
+  const report = useCallback(
+    async (r: { type: string; lat: number; lng: number; note: string }) => {
+      const t = tokenRef.current;
+      if (!t) throw new FamilyError(401, 'Not in a family');
+      setState(await guard(() => familyApi.report(t, r)));
+    },
+    [guard],
+  );
+
   const newLink = useCallback(async () => {
     const t = tokenRef.current;
     if (t) setState(await guard(() => familyApi.newLink(t)));
@@ -111,8 +120,8 @@ export function useFamily(enabled: boolean) {
 
   const me = state?.members.find((m) => m.id === state.me) ?? null;
   return useMemo(
-    () => ({ token, state, me, inFamily: token != null, loadError, refresh, start, join, update, newLink, leave }),
-    [token, state, me, loadError, refresh, start, join, update, newLink, leave],
+    () => ({ token, state, me, inFamily: token != null, loadError, refresh, start, join, update, report, newLink, leave }),
+    [token, state, me, loadError, refresh, start, join, update, report, newLink, leave],
   );
 }
 
