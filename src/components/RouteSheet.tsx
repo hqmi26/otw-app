@@ -1,7 +1,7 @@
 import type { Place, Route } from '../lib/api';
 import { formatClock, formatDistance, formatDuration } from '../lib/geo';
 import { useSheetHeight } from '../hooks/useSheetHeight';
-import { BackIcon, CloseIcon, NavArrowIcon, PlusIcon, StarIcon } from './icons';
+import { BackIcon, CloseIcon, NavArrowIcon, PlusIcon, StarIcon, UsersIcon } from './icons';
 
 interface Props {
   destination: Place;
@@ -15,6 +15,9 @@ interface Props {
   selected: number;
   /** Rush-hour slow-down for leaving now (1 = normal traffic). */
   rush: number;
+  /** "Share live trip with family" switch; null hides it (no family, or on Private). */
+  shareLive: boolean | null;
+  onToggleShareLive: () => void;
   onSelect: (index: number) => void;
   onStart: () => void;
   onRetry: () => void;
@@ -122,6 +125,28 @@ export default function RouteSheet(p: Props) {
             <span className="row-sub wrap">{p.rush > 1 ? 'Includes usual rush-hour traffic' : ' '}</span>
             <button type="button" className="text-btn" onClick={p.onShowSteps}>
               All turns ›
+            </button>
+          </div>
+        )}
+
+        {p.shareLive != null && (
+          <div className="setting-row share-live">
+            <UsersIcon size={20} className="muted" />
+            <span className="row-text">
+              <span id="share-live" className="row-title">
+                Share live trip with family
+              </span>
+              <span className="row-sub wrap">They see your car move. Off when you arrive.</span>
+            </span>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={p.shareLive}
+              aria-labelledby="share-live"
+              className={`switch${p.shareLive ? ' is-on' : ''}`}
+              onClick={p.onToggleShareLive}
+            >
+              <span className="switch-knob" />
             </button>
           </div>
         )}

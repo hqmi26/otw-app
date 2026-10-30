@@ -5,7 +5,7 @@ import type { HazardType } from '../lib/models';
 import type { Progress } from '../hooks/useNavigation';
 import { useSheetHeight } from '../hooks/useSheetHeight';
 import { HazardIcon, ManeuverIcon } from './brand';
-import { AlertIcon, ChatIcon, MutedIcon, NavArrowIcon, SoundIcon } from './icons';
+import { AlertIcon, ChatIcon, MutedIcon, NavArrowIcon, SoundIcon, UsersIcon } from './icons';
 
 interface Props {
   route: Route;
@@ -22,6 +22,8 @@ interface Props {
   following: boolean;
   /** The nearest reported hazard on the road ahead, in metres. */
   hazardAhead: { type: HazardType; distance: number } | null;
+  /** Family can see the car move (Share live trip is on). */
+  sharingLive: boolean;
   onRecenter: () => void;
   onToggleMute: () => void;
   onDemoSpeed: () => void;
@@ -71,6 +73,12 @@ export default function NavigationView(p: Props) {
           </span>
         )}
         {p.rerouting && <span className="chip">Finding a new route…</span>}
+        {p.sharingLive && !p.hazardAhead && !p.rerouting && (
+          <span className="chip chip-family">
+            <UsersIcon size={16} />
+            {p.lang === 'ms' ? 'Family nampak trip anda' : 'Family can see your trip'}
+          </span>
+        )}
         {p.demoSpeed != null && (
           <button type="button" className="chip chip-btn" onClick={p.onDemoSpeed}>
             Demo drive ×{p.demoSpeed}
@@ -125,7 +133,10 @@ export default function NavigationView(p: Props) {
             <h2 id="arrive-title" className="sheet-title big">
               Dah sampai!
             </h2>
-            <p className="row-sub">You’ve arrived at {p.destination.name}.</p>
+            <p className="row-sub wrap">
+              You’ve arrived at {p.destination.name}.
+              {p.sharingLive && ' Live trip turned off: family see your area only.'}
+            </p>
             <button type="button" className="primary-btn" onClick={p.onEnd}>
               Done
             </button>

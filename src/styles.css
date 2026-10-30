@@ -1643,6 +1643,222 @@ textarea.input {
   stroke-linejoin: round;
 }
 
+/* ---------- Family sharing ---------- */
+.page-head .row-text {
+  gap: 0;
+}
+
+.row:disabled {
+  cursor: default;
+}
+
+a.primary-btn {
+  text-decoration: none;
+}
+
+.avatar.is-private {
+  background: var(--fill);
+  color: var(--muted);
+}
+
+.family-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.switch-label {
+  flex-shrink: 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.live-badge {
+  flex-shrink: 0;
+  font-weight: 800;
+}
+
+.invite-link {
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: var(--fill);
+  font-size: 14px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.text-btn.with-icon {
+  align-self: flex-start;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+}
+
+.share-live {
+  min-height: 52px;
+}
+
+.chip-family {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--accent-text);
+}
+
+.join {
+  display: flex;
+  flex-direction: column;
+}
+
+.join .login-title {
+  margin-top: 20px;
+}
+
+.join .login-lead {
+  margin-bottom: 8px;
+}
+
+.join-loading {
+  margin-top: 40px;
+}
+
+.join-faces {
+  margin-top: 32px;
+  display: flex;
+}
+
+.join-faces .avatar {
+  border: 3px solid var(--bg);
+}
+
+.join-faces .avatar + .avatar {
+  margin-left: -10px;
+}
+
+.avatar.is-more {
+  background: var(--line);
+  color: var(--text2);
+}
+
+.join-done {
+  margin-top: 40px;
+  width: 72px;
+  height: 72px;
+  border-radius: 999px;
+  background: var(--badge);
+  color: var(--accent-text);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.join .primary-btn:not(.login-btn) {
+  margin-top: 24px;
+}
+
+.join-points {
+  margin: 18px 0 0;
+  padding: 14px 16px;
+  list-style: none;
+  border-radius: 16px;
+  background: var(--fill);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  font-size: 14px;
+  line-height: 1.4;
+  color: var(--text2);
+}
+
+.join-points li {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.join-points svg {
+  flex-shrink: 0;
+  color: var(--accent);
+}
+
+/* Family on the map: the marker is the circle (or car); the name hangs below it. */
+.family-marker {
+  position: relative;
+  display: flex;
+  justify-content: center;
+}
+
+/* A moving car is the most important thing to see, so it sits above the circles. */
+.family-marker.is-car {
+  z-index: 1;
+}
+
+.family-spot {
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.family-marker.is-area .family-spot {
+  width: 76px;
+  height: 76px;
+  background: color-mix(in srgb, var(--c) 14%, transparent);
+  border: 2px dashed color-mix(in srgb, var(--c) 55%, transparent);
+}
+
+.family-face {
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  border: 2px solid #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 800;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.family-face + .family-face {
+  margin-left: -8px;
+}
+
+.family-marker.is-car .family-spot {
+  width: 40px;
+  height: 40px;
+  background: var(--c);
+  border: 3px solid #fff;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.family-arrow {
+  display: flex;
+  transition: transform 0.4s ease;
+}
+
+.family-arrow svg {
+  width: 18px;
+  height: 18px;
+  fill: #fff;
+}
+
+.family-label {
+  position: absolute;
+  top: calc(100% + 4px);
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
 /* ---------- Toast ---------- */
 .toast {
   position: absolute;

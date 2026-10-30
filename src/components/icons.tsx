@@ -227,3 +227,17 @@ export const FlagIcon = (p: IconProps) => (
     <path d="M5 4h12l-2 4 2 4H5" />
   </Stroke>
 );
+
+export const CopyIcon = (p: IconProps) => (
+  <Stroke {...p}>
+    <rect x="9" y="9" width="11" height="11" rx="2" />
+    <path d="M5 15V6a2 2 0 0 1 2-2h8" />
+  </Stroke>
+);
+
+export const RefreshIcon = (p: IconProps) => (
+  <Stroke {...p}>
+    <path d="M20 11a8 8 0 1 0-2.3 5.7" />
+    <path d="M20 4v7h-7" />
+  </Stroke>
+);
