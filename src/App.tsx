@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import MapView, { type MapMode } from './components/MapView';
+import MapView, { type FamilyPin, type MapMode } from './components/MapView';
 import IntroScreen from './components/IntroScreen';
 import LoginScreen from './components/LoginScreen';
+import JoinScreen from './components/JoinScreen';
 import HomeScreen from './components/HomeScreen';
 import SearchScreen, { type SearchPurpose } from './components/SearchScreen';
 import RouteSheet from './components/RouteSheet';
@@ -9,12 +10,18 @@ import NavigationView from './components/NavigationView';
 import LocationScreen from './components/LocationScreen';
 import AccountScreen from './components/AccountScreen';
 import FamilyScreen from './components/FamilyScreen';
+import PrivacyScreen from './components/PrivacyScreen';
+import ReportInfoSheet from './components/ReportInfoSheet';
+import { fetchReports, shareReport, voteReport } from './lib/reports';
 import ReportSheet from './components/ReportSheet';
 import SavePlaceSheet from './components/SavePlaceSheet';
 import StepsSheet from './components/StepsSheet';
 import FeedbackSheet from './components/FeedbackSheet';
+import AddPlaceSheet from './components/AddPlaceSheet';
 import { CheckIcon } from './components/icons';
-import { getRoutes, reverseGeocode, type Place, type Route } from './lib/api';
+import { getRoutes, type Place, type Route } from './lib/api';
+import { loadPlaces, type PlaceGroup, type PlacesIndex, type RouteAhead } from './lib/places';
+import { whatIsHere } from './lib/search';
 import {
   bearing,
   cumulative,
@@ -24,19 +31,25 @@ import {
   snapToLine,
   type LngLat,
 } from './lib/geo';
-import { aheadPhrase, hazardPhrase, instruction, PHRASES, type Lang } from './lib/instructions';
+import { aheadPhrase, hazardPhrase, instruction, nextAction, PHRASES, worthSaying, type Lang } from './lib/instructions';
 import { rushHourFactor } from './lib/eta';
 import {
   HAZARDS,
-  REPORT_LIFETIME_MS,
+  initials,
+  reportLifetime,
   type HazardReport,
   type HazardType,
+  type MyPlace,
   type Profile,
   type SavedKind,
   type SavedPlace,
 } from './lib/models';
+import { inviteCodeFromPath, memberColor, type FamilyMember } from './lib/family';
 import { speak, stopSpeaking } from './lib/voice';
+import { keepScreenOn, letScreenSleep } from './lib/keepAwake';
+import { countOpen, countTrip } from './lib/visits';
 import { useGeolocation } from './hooks/useGeolocation';
+import { useArea, useFamily, useFamilySharing } from './hooks/useFamily';
 import { useTheme } from './hooks/useTheme';
 import { useRecents } from './hooks/useRecents';
 import { useStored } from './hooks/useStored';
@@ -44,11 +57,24 @@ import { usePresence } from './hooks/usePresence';
 import { useNavProgress, useSimulatedDrive } from './hooks/useNavigation';
 import { requestCompassPermission, useCompass } from './hooks/useCompass';
 
-type Screen = 'home' | 'search' | 'route' | 'nav' | 'family' | 'account' | 'report' | 'save' | 'steps' | 'feedback';
+type Screen =
+  | 'home'
+  | 'search'
+  | 'route'
+  | 'nav'
+  | 'family'
+  | 'account'
+  | 'privacy'
+  | 'report'
+  | 'save'
+  | 'steps'
+  | 'feedback'
+  | 'addplace'
+  | 'reportinfo';
 /** Screens that open as a sheet over whatever is underneath. */
-const MODALS: Screen[] = ['report', 'save', 'steps', 'feedback'];
+const MODALS: Screen[] = ['report', 'save', 'steps', 'feedback', 'reportinfo'];
 /** Full-screen pages opened from home; home stays mounted underneath them. */
-const HOME_OVERLAYS: Screen[] = ['search', 'account', 'family', 'report', 'save', 'feedback'];
+const HOME_OVERLAYS: Screen[] = ['search', 'account', 'privacy', 'family', 'report', 'save', 'feedback'];
 
 /**
  * Add ?sim to the address to fake the drive, e.g. testing on a laptop. It also
@@ -65,6 +91,8 @@ const HAZARD_SHOW_M = 1500;
 const HAZARD_SPEAK_M = 600;
 /** Closer than this to the stop (e.g. parked at the school gate) counts as having reached it. */
 const AT_STOP_M = 150;
+/** The whole-route view goes back to following the car after this long. */
+const OVERVIEW_MS = 15_000;
 
 /** Pixels the UI covers at the top/bottom, so the map centres in the visible gap. */
 const INSETS: Partial<Record<Screen, { top: number; bottom: number }>> = {
@@ -83,17 +111,29 @@ export default function App() {
   const [profile, setProfile] = useStored<Profile | null>('otw-profile', null, (v) => v == null || typeof v === 'object');
   const [saved, setSaved] = useStored<SavedPlace[]>('otw-saved', [], isArray);
   const [reports, setReports] = useStored<HazardReport[]>('otw-reports', [], isArray);
+  /** Places the user added because search couldn't find them (on this phone until accounts exist). */
+  const [myPlaces, setMyPlaces] = useStored<MyPlace[]>('otw-my-places', [], isArray);
   /** Language for turn instructions and voice (Account → Voice directions). */
   const [lang, setLang] = useStored<Lang>('otw-voice-lang', 'en', (v) => v === 'en' || v === 'ms');
 
-  // --- Opening: logo intro, then login the first time. ---
-  const [phase, setPhase] = useState<'intro' | 'login' | 'app'>('intro');
+  // --- Opening: logo intro, then login the first time (or joining, from a family invite link). ---
+  const [phase, setPhase] = useState<'intro' | 'join' | 'login' | 'app'>('intro');
+  const [inviteCode, setInviteCode] = useState(() => inviteCodeFromPath(window.location.pathname));
   const hasProfile = useRef(profile != null);
   hasProfile.current = profile != null;
+  const hasInvite = useRef(inviteCode != null);
   const finishIntro = useCallback(
-    () => setPhase((ph) => (ph === 'intro' ? (hasProfile.current ? 'app' : 'login') : ph)),
+    () =>
+      setPhase((ph) => (ph === 'intro' ? (hasInvite.current ? 'join' : hasProfile.current ? 'app' : 'login') : ph)),
     [],
   );
+  const family = useFamily(phase === 'app' && profile != null);
+  // How many phones use OTW: one anonymous count a day (Account → Privacy & data).
+  useEffect(() => {
+    if (phase === 'app') countOpen();
+  }, [phase]);
+  /** In a family and not on Private: your area and ETA go to the family. */
+  const canShare = family.me != null && !family.me.private;
 
   // --- Screens. Kept in browser history so the phone's back gesture works. ---
   const [stack, setStack] = useState<Screen[]>(['home']);
@@ -101,10 +141,14 @@ export default function App() {
   stackRef.current = stack;
   const lastMove = useRef<'push' | 'pop'>('push');
   const top = stack[stack.length - 1];
-  const base = [...stack].reverse().find((s) => !MODALS.includes(s)) ?? 'home';
+  // Searching for a stop while driving keeps the trip going underneath (voice, GPS, the map).
+  const base =
+    [...stack].reverse().find((s) => !MODALS.includes(s) && !(s === 'search' && stack.includes('nav'))) ?? 'home';
 
   useEffect(() => {
-    window.history.replaceState({ depth: 0 }, '');
+    // An invite link (/join/CODE) has been read; the app itself lives at /.
+    const url = inviteCodeFromPath(window.location.pathname) ? `/${window.location.search}` : undefined;
+    window.history.replaceState({ depth: 0 }, '', url);
     const onPop = (e: PopStateEvent) => {
       const depth = typeof e.state?.depth === 'number' ? e.state.depth : 0;
       lastMove.current = 'pop';
@@ -149,6 +193,27 @@ export default function App() {
   const [placeToSave, setPlaceToSave] = useState<Place | null>(null);
   /** A stop on the way, e.g. fetching Adik from school on the way home. */
   const [stop, setStop] = useState<Place | null>(null);
+  /** Family see the car move on this trip. Set before Start; off again after every trip. */
+  const [shareLive, setShareLive] = useState(false);
+  const [pickStart, setPickStart] = useState<LngLat | null>(null);
+  const pickRef = useRef<(() => LngLat | null) | null>(null);
+
+  // Sabah's place list for the map labels. Fetched after the app has opened so
+  // it doesn't hold up the first map tiles; tried again on the next screen change if offline.
+  const [places, setPlaces] = useState<PlacesIndex | null>(null);
+  useEffect(() => {
+    if (phase !== 'app' || places) return;
+    let alive = true;
+    const t = window.setTimeout(() => {
+      loadPlaces().then((ix) => {
+        if (alive && ix) setPlaces(ix);
+      });
+    }, 800);
+    return () => {
+      alive = false;
+      window.clearTimeout(t);
+    };
+  }, [phase, places, base]);
 
   const realPos = geo.fix?.coord ?? null;
   const origin = realPos ?? (FORCE_SIM ? DEMO_START : null);
@@ -166,6 +231,7 @@ export default function App() {
       setStop(null);
       setRoutes(null);
       setActiveRoute(null);
+      setShareLive(false);
       stopSpeaking();
     }
   }, [stack]);
@@ -185,7 +251,9 @@ export default function App() {
         setRouteError(
           e.message === 'No route found'
             ? 'No driving route found to this place.'
-            : 'Couldn’t get directions. Check your internet and try again.',
+            : e.name === 'BusyError'
+              ? 'The route services are busy right now. Try again in a minute.'
+              : 'Couldn’t get directions. Check your internet and try again.',
         );
       });
   }, []);
@@ -211,7 +279,7 @@ export default function App() {
     };
     openRoute(pin, false);
     // Then find out what's there and name the pin after it.
-    reverseGeocode(coord)
+    whatIsHere(coord, myPlaces)
       .then((found) => {
         if (!found) return;
         const named = { ...pin, name: found.name, subtitle: found.subtitle };
@@ -228,7 +296,8 @@ export default function App() {
       setPlaceToSave(place);
       go('save');
     } else if (searchPurpose === 'stop') {
-      if (origin && destination) {
+      if (stack.includes('nav')) addStopWhileDriving(place);
+      else if (origin && destination) {
         setStop(place);
         fetchRoutes(origin, destination, place);
       }
@@ -250,9 +319,12 @@ export default function App() {
   const startTrip = () => {
     if (!routes || !destination) return;
     void requestCompassPermission(); // iPhone only asks inside a tap
+    keepScreenOn();
+    if (realPos && !FORCE_SIM) countTrip(); // demo drives aren't real trips
     const route = routes[selected];
     spoken.current.clear();
     pace.current = null;
+    tripFinished.current = false;
     tripRush.current = rushHourFactor(new Date());
     setActiveRoute(route);
     go('nav');
@@ -285,6 +357,24 @@ export default function App() {
     back();
   };
   const savedAs = destination ? (saved.find((s) => s.place.id === destination.id)?.label ?? null) : null;
+
+  // --- Missing places the user adds themselves ---
+  const openAddPlace = (start: LngLat | null) => {
+    setPickStart(start);
+    go('addplace');
+  };
+  const addMyPlace = (name: string, group: PlaceGroup) => {
+    const coord = pickRef.current?.();
+    if (!coord) return;
+    setMyPlaces((list) => [...list, { id: `mine:${Date.now()}`, name, group, coord, at: Date.now() }]);
+    showToast(`Added ${name} – search finds it now`);
+    backTo(0);
+  };
+  const removeMyPlace = (id: string) => {
+    setMyPlaces((list) => list.filter((p) => p.id !== id));
+    showToast('Place removed');
+    back();
+  };
 
   // --- Send ETA: opens WhatsApp with the message ready, and the driver picks the chat. ---
   const sendEta = (secondsLeft: number) => {
@@ -350,7 +440,28 @@ export default function App() {
     if (base === 'nav') setFollowing(true);
   }, [base]);
 
-  // Voice: once ~400 m before a turn, once just before it.
+  // "Whole route" button: zoom out to the rest of the trip, then back to the car
+  // by itself, unless the user starts moving the map around.
+  const [overview, setOverview] = useState<{ coords: LngLat[]; key: number } | null>(null);
+  const showOverview = () => {
+    if (!activeRoute || !routeCum) return;
+    const covered = progress?.covered ?? 0;
+    const next = routeCum.findIndex((d) => d > covered);
+    const ahead = next === -1 ? [] : activeRoute.coords.slice(next);
+    setFollowing(false);
+    setOverview({ coords: shownNavPos ? [shownNavPos, ...ahead] : ahead, key: Date.now() });
+  };
+  useEffect(() => {
+    if (!overview) return;
+    const t = window.setTimeout(() => setFollowing(true), OVERVIEW_MS);
+    return () => window.clearTimeout(t);
+  }, [overview]);
+  useEffect(() => {
+    if (following) setOverview(null);
+  }, [following]);
+
+  // Voice: once ~400 m before a turn, once just before it. Steps that only say
+  // "carry on" are skipped, so the distance counts on to the next real turn.
   const spoken = useRef(new Set<string>());
   useEffect(() => {
     if (base !== 'nav' || !progress || !activeRoute || muted) return;
@@ -361,17 +472,18 @@ export default function App() {
       }
       return;
     }
-    const step = activeRoute.steps[progress.stepIndex];
-    if (!step || progress.stepIndex === 0) return;
-    const far = `${progress.stepIndex}-far`;
-    const near = `${progress.stepIndex}-near`;
-    if (progress.toManeuver < 60 && !spoken.current.has(near)) {
+    const { index, distance: toTurn } = nextAction(activeRoute.steps, progress.stepIndex, progress.toManeuver);
+    const step = activeRoute.steps[index];
+    if (!step || index === 0 || !worthSaying(step)) return;
+    const far = `${index}-far`;
+    const near = `${index}-near`;
+    if (toTurn < 60 && !spoken.current.has(near)) {
       spoken.current.add(near);
       spoken.current.add(far);
       speak(instruction(step, lang), lang);
-    } else if (progress.toManeuver < 400 && !spoken.current.has(far)) {
+    } else if (toTurn < 400 && !spoken.current.has(far)) {
       spoken.current.add(far);
-      speak(aheadPhrase(progress.toManeuver, step, lang), lang);
+      speak(aheadPhrase(toTurn, step, lang), lang);
     }
   }, [base, progress, activeRoute, muted, lang]);
 
@@ -411,7 +523,7 @@ export default function App() {
     setRerouting(true);
     // Still on the way to the stop: the new route goes through it too.
     const via = shownStop && distance(realPos, shownStop.coord) > AT_STOP_M ? shownStop : null;
-    getRoutes(realPos, destination.coord, undefined, via)
+    getRoutes(realPos, destination.coord, undefined, via, false)
       .then((list) => {
         spoken.current.clear();
         pace.current = null;
@@ -425,34 +537,110 @@ export default function App() {
       .finally(() => setRerouting(false));
   }, [base, simulate, progress, destination, shownStop, realPos, rerouting, muted, lang]);
 
-  // Keep the screen on while driving.
+  // "Add a stop" while driving: a new route from here through the stop. If it
+  // can't be found, the trip carries on as it was.
+  const addStopWhileDriving = (place: Place) => {
+    const from = shownNavPos ?? origin;
+    if (!from || !destination) return;
+    setRerouting(true);
+    lastReroute.current = Date.now();
+    getRoutes(from, destination.coord, undefined, place, false)
+      .then((list) => {
+        spoken.current.clear();
+        pace.current = null;
+        setStop(place);
+        setActiveRoute(list[0]);
+        if (!muted) speak(PHRASES.stopAdded[lang], lang);
+      })
+      .catch((e: Error) => {
+        showToast(e.name === 'BusyError' ? 'Routes are busy. Try the stop again in a minute' : 'Couldn’t add that stop');
+      })
+      .finally(() => setRerouting(false));
+  };
+
+  // Keep the screen on while driving (also asked for in the Start tap, for iPhones).
   useEffect(() => {
-    if (base !== 'nav' || !('wakeLock' in navigator)) return;
-    let lock: WakeLockSentinel | null = null;
-    navigator.wakeLock
-      .request('screen')
-      .then((l) => (lock = l))
-      .catch(() => {});
-    return () => {
-      lock?.release().catch(() => {});
-    };
+    if (base !== 'nav') return;
+    keepScreenOn();
+    return letScreenSleep;
   }, [base]);
 
-  // --- Hazard reports (on this phone until family sharing exists) ---
+  // --- Hazard reports: shared with every OTW driver nearby (no names). One that
+  // couldn't be sent (offline) stays on this phone. ---
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const id = window.setInterval(() => setNow(Date.now()), 60000);
     return () => window.clearInterval(id);
   }, []);
-  const liveReports = useMemo(() => reports.filter((r) => now - r.at < REPORT_LIFETIME_MS), [reports, now]);
+  const [sharedReports, setSharedReports] = useState<HazardReport[]>([]);
+  /** Reports this phone made or answered, so it doesn't ask "Still there?" about them again. */
+  const [answered, setAnswered] = useStored<string[]>('otw-report-answers', [], isArray);
+  const markAnswered = (id: string) => setAnswered((list) => [...list.filter((x) => x !== id), id].slice(-200));
+  const reportsNear = useRef(origin);
+  reportsNear.current = origin;
+  useEffect(() => {
+    if (phase !== 'app' || !locationReady) return;
+    const load = () => {
+      if (reportsNear.current) fetchReports(reportsNear.current).then(setSharedReports, () => {});
+    };
+    load();
+    const id = window.setInterval(load, 120_000);
+    return () => window.clearInterval(id);
+  }, [phase, locationReady]);
+  const liveReports = useMemo(() => {
+    const lasts = (r: HazardReport) => now - (r.seenAt ?? r.at) < reportLifetime(r.type);
+    const shared = sharedReports.filter(lasts);
+    const ids = new Set(shared.map((r) => r.id));
+    return [...shared, ...reports.filter((r) => !ids.has(r.id) && lasts(r))];
+  }, [sharedReports, reports, now]);
   const reportPos = base === 'nav' ? shownNavPos : realPos;
   const sendReport = (type: HazardType, note: string) => {
     if (!reportPos) return;
-    const report: HazardReport = { id: `${Date.now()}`, type, coord: reportPos, note, at: Date.now() };
-    setReports((list) => [...list.filter((r) => Date.now() - r.at < REPORT_LIFETIME_MS), report]);
+    const local: HazardReport = { id: `local-${Date.now()}`, type, coord: reportPos, note, at: Date.now() };
+    setReports((list) => [...list.filter((r) => Date.now() - r.at < reportLifetime(r.type)), local]);
     const label = HAZARDS.find((h) => h.type === type)!.label;
     showToast(`${label} reported`);
     back();
+    shareReport(type, reportPos, note)
+      .then((shared) => {
+        setReports((list) => list.filter((r) => r.id !== local.id)); // it's on the server now
+        setSharedReports((list) => [shared, ...list]);
+        markAnswered(shared.id);
+      })
+      .catch(() => {
+        // Not sent (offline): it stays on this phone.
+      });
+  };
+
+  // Tap a report on the map: "Still there?"
+  const [tappedReport, setTappedReport] = useState<HazardReport | null>(null);
+  const openReport = (id: string) => {
+    const report = liveReports.find((r) => r.id === id);
+    if (!report) return;
+    setTappedReport(report);
+    go('reportinfo');
+  };
+  const answerReport = (still: boolean) => {
+    const r = tappedReport;
+    if (!r) return;
+    markAnswered(r.id);
+    back();
+    if (!r.shared) {
+      if (!still) setReports((list) => list.filter((x) => x.id !== r.id));
+      showToast(still ? 'Thanks!' : 'Report removed');
+      return;
+    }
+    showToast(still ? 'Thanks! Drivers will see it’s still there' : 'Thanks! It goes once another driver agrees');
+    voteReport(r.id, still)
+      .then((updated) =>
+        setSharedReports((list) =>
+          updated ? list.map((x) => (x.id === r.id ? updated : x)) : list.filter((x) => x.id !== r.id),
+        ),
+      )
+      .catch(() => {
+        // Didn't get through (offline, or too many at once): it can be answered again.
+        setAnswered((list) => list.filter((x) => x !== r.id));
+      });
   };
 
   // Reports on the road ahead: a chip from 1.5 km, and the voice once at ~600 m.
@@ -480,36 +668,101 @@ export default function App() {
     speak(hazardPhrase(hazardAhead.report.type, hazardAhead.distance, lang), lang, { queue: true });
   }, [hazardAhead, muted, lang]);
 
-  const shareApp = async () => {
-    const url = window.location.origin;
-    const text = 'Jom guna OTW – aplikasi trip kita!';
-    try {
-      if (navigator.share) {
-        await navigator.share({ title: 'OTW', text, url });
-        return;
+  // --- Family sharing: your area always, the trip ETA while driving, and the
+  // moving car only when "Share live trip" was switched on for this trip. ---
+  // Not looked up on Private: nothing about you goes anywhere for it.
+  const myArea = useArea(phase === 'app' && canShare ? realPos : null);
+  // Once arrived, sharing stays off even if the car moves again before Done is tapped.
+  const tripFinished = useRef(false);
+  if (progress?.arrived) tripFinished.current = true;
+  // A demo drive (no GPS) isn't real, so family don't see it, unless testing with ?sim.
+  const tripShare =
+    canShare && base === 'nav' && destination && progress && !tripFinished.current && remainingTime != null && (!simulate || FORCE_SIM)
+      ? { to: savedAs ?? destination.name, eta: Math.round(Date.now() / 1000 + remainingTime) }
+      : null;
+  const liveShare =
+    tripShare && shareLive && shownNavPos ? { lat: shownNavPos[1], lng: shownNavPos[0], heading: travelHeading } : null;
+  useFamilySharing(family, { area: myArea, trip: tripShare, live: liveShare });
+
+  // Family on the home map: one circle per area, and a car for anyone on a live trip.
+  const onTrip = stack.includes('route') || stack.includes('nav');
+  const familyPins = useMemo(() => {
+    const state = family.state;
+    if (!state || onTrip) return [];
+    const pins: FamilyPin[] = [];
+    const areas = new Map<string, { pin: FamilyPin; names: string[] }>();
+    for (const m of state.members) {
+      if (m.id === state.me || m.private) continue;
+      const person = { initials: initials(m.name), color: memberColor(state, m.id) ?? '#0e7c6b' };
+      if (m.live) {
+        pins.push({
+          id: `car:${m.id}`,
+          kind: 'car',
+          coord: [m.live.lng, m.live.lat],
+          heading: m.live.heading,
+          people: [person],
+          label: m.trip ? `${m.name} · ETA ${formatClock(new Date(m.trip.eta * 1000))}` : m.name,
+        });
+      } else if (m.area) {
+        const group = areas.get(m.area.name);
+        if (group) {
+          group.pin.people.push(person);
+          group.names.push(m.name);
+        } else {
+          const pin: FamilyPin = { id: `area:${m.area.name}`, kind: 'area', coord: [m.area.lng, m.area.lat], people: [person], label: '' };
+          areas.set(m.area.name, { pin, names: [m.name] });
+          pins.push(pin);
+        }
       }
-      await navigator.clipboard.writeText(`${text} ${url}`);
-      showToast('Link copied – paste it in the family WhatsApp');
-    } catch {
-      // Share sheet closed: nothing to do.
     }
+    for (const [area, { pin, names }] of areas) {
+      const who = names.length === 1 ? names[0] : names.length === 2 ? `${names[0]} & ${names[1]}` : `${names.length} people`;
+      pin.label = `${who} · ${area}`;
+    }
+    return pins;
+  }, [family.state, onTrip]);
+
+  const [familyFocus, setFamilyFocus] = useState<{ coord: LngLat; key: number } | null>(null);
+  const showMember = (m: FamilyMember) => {
+    const coord: LngLat | null = m.live ? [m.live.lng, m.live.lat] : m.area ? [m.area.lng, m.area.lat] : null;
+    if (!coord) return;
+    setFamilyFocus({ coord, key: Date.now() });
+    if (base !== 'home') backTo(0);
   };
 
   // --- Leaving animations for full-screen pages ---
   const leaveStyle = lastMove.current === 'pop' ? 'pop' : 'fade';
-  const searchView = usePresence(phase === 'app' && base === 'search');
+  const searchView = usePresence(phase === 'app' && (base === 'search' || top === 'search'));
   const accountView = usePresence(phase === 'app' && base === 'account');
+  const privacyView = usePresence(phase === 'app' && base === 'privacy');
   const familyView = usePresence(phase === 'app' && base === 'family');
   const reportView = usePresence(phase === 'app' && top === 'report', 250);
+  const reportInfoView = usePresence(phase === 'app' && top === 'reportinfo' && tappedReport != null, 250);
   const saveView = usePresence(phase === 'app' && top === 'save' && placeToSave != null, 250);
   const stepsRoute = base === 'nav' ? activeRoute : (routes?.[selected] ?? null);
   const stepsView = usePresence(phase === 'app' && top === 'steps' && stepsRoute != null, 250);
   const feedbackView = usePresence(phase === 'app' && top === 'feedback', 250);
 
-  const mapMode: MapMode = base === 'nav' ? 'nav' : base === 'route' ? 'preview' : 'browse';
+  // Adding a stop: the search chips look along the road still ahead ("Petrol on the way").
+  const previewRoute = routes?.[selected] ?? null;
+  const previewCum = useMemo(() => (previewRoute ? cumulative(previewRoute.coords) : null), [previewRoute]);
+  const stopRoute: RouteAhead | null =
+    searchPurpose !== 'stop'
+      ? null
+      : stack.includes('nav') && activeRoute && routeCum
+        ? { coords: activeRoute.coords, cum: routeCum, from: progress?.covered ?? 0 }
+        : previewRoute && previewCum
+          ? { coords: previewRoute.coords, cum: previewCum, from: 0 }
+          : null;
+
+  const mapMode: MapMode =
+    base === 'nav' ? 'nav' : base === 'route' ? 'preview' : base === 'addplace' ? 'pick' : 'browse';
+  const baseInsets = INSETS[base] ?? NO_INSETS;
+  // The "Share live trip" row makes the route sheet taller.
+  const insets = base === 'route' && canShare ? { top: baseInsets.top, bottom: baseInsets.bottom + 60 } : baseInsets;
   // Keep the home screen alive under full-screen pages opened from it, so going
   // back is instant instead of rebuilding (and re-animating) the whole screen.
-  const homeAlive = base === 'home' || (HOME_OVERLAYS.includes(base) && !stack.includes('route') && !stack.includes('nav'));
+  const homeAlive = base === 'home' || (HOME_OVERLAYS.includes(base) && !onTrip);
 
   return (
     <div className="app" data-screen={base}>
@@ -523,14 +776,27 @@ export default function App() {
         destination={destination?.coord ?? null}
         stop={shownStop?.coord ?? null}
         reports={liveReports}
-        insets={INSETS[base] ?? NO_INSETS}
+        onReportTap={openReport}
+        family={familyPins}
+        focus={familyFocus}
+        overview={base === 'nav' ? overview : null}
+        insets={insets}
         recenterKey={recenterKey}
         follow={following}
         onSelectRoute={setSelected}
         onUserMove={() => {
-          if (base === 'nav') setFollowing(false);
+          if (base !== 'nav') return;
+          setFollowing(false);
+          setOverview(null); // looking around: stay put until Re-centre
         }}
         onLongPress={dropPin}
+        places={places}
+        myPlaces={myPlaces}
+        onPickPlace={(place) => {
+          if (base === 'home') openRoute(place);
+        }}
+        pickStart={pickStart}
+        pickRef={pickRef}
       />
 
       {phase === 'app' && profile && !locationReady && <LocationScreen problem={geo.problem} onRetry={geo.retry} />}
@@ -541,6 +807,8 @@ export default function App() {
             <div className="home-layer" inert={base !== 'home'}>
             <HomeScreen
               profile={profile}
+              family={family}
+              myArea={myArea?.name ?? null}
               position={realPos}
               locationNote={locationNote}
               saved={saved}
@@ -561,6 +829,7 @@ export default function App() {
               }}
               onReport={() => go('report')}
               onFamily={() => go('family')}
+              onShowMember={showMember}
               onFeedback={() => go('feedback')}
             />
             </div>
@@ -576,6 +845,8 @@ export default function App() {
               error={routeError}
               selected={selected}
               rush={rushHourFactor(new Date())}
+              shareLive={canShare ? shareLive : null}
+              onToggleShareLive={() => setShareLive((on) => !on)}
               onSelect={setSelected}
               onShowSteps={() => go('steps')}
               onStart={startTrip}
@@ -587,9 +858,13 @@ export default function App() {
                 setPlaceToSave(destination);
                 go('save');
               }}
+              onAddMissing={destination.id.startsWith('pin:') ? () => openAddPlace(destination.coord) : undefined}
+              onRemoveMine={destination.id.startsWith('mine:') ? () => removeMyPlace(destination.id) : undefined}
               onBack={back}
             />
           )}
+
+          {base === 'addplace' && <AddPlaceSheet onSave={addMyPlace} onBack={back} />}
 
           {base === 'nav' && activeRoute && destination && (
             <NavigationView
@@ -603,6 +878,7 @@ export default function App() {
               demoSpeed={simulate ? DEMO_SPEEDS[demoSpeedIdx] : null}
               following={following}
               onRecenter={() => setFollowing(true)}
+              onOverview={showOverview}
               onToggleMute={() => {
                 if (!muted) stopSpeaking();
                 setMuted((m) => !m);
@@ -611,6 +887,8 @@ export default function App() {
               onShowSteps={() => go('steps')}
               onReport={() => go('report')}
               hazardAhead={hazardAhead && { type: hazardAhead.report.type, distance: hazardAhead.distance }}
+              sharingLive={canShare && shareLive}
+              onAddStop={addStop}
               onSendEta={sendEta}
               onEnd={endTrip}
             />
@@ -621,9 +899,12 @@ export default function App() {
               position={realPos}
               recents={recents}
               saved={saved}
+              myPlaces={myPlaces}
               purpose={searchPurpose}
+              route={stopRoute}
               leaving={searchView.leaving ? leaveStyle : null}
               onPick={pickFromSearch}
+              onAddMissing={() => openAddPlace(realPos)}
               onBack={back}
             />
           )}
@@ -635,15 +916,19 @@ export default function App() {
               leaving={accountView.leaving ? leaveStyle : null}
               onSaveName={(name) => {
                 setProfile({ ...profile, name });
+                if (family.inFamily) void family.update({ name }).catch(() => {});
                 showToast(`Saved! Family sees you as ${name}`);
               }}
               onToggleTheme={toggleTheme}
               lang={lang}
               onLang={setLang}
-              onTestVoice={(l) => speak(PHRASES.test[l], l)}
+              onTestVoice={(l) => speak(PHRASES.test[l], l, { repeat: true })}
               onFeedback={() => go('feedback')}
+              onPrivacy={() => go('privacy')}
               onLogout={() => {
                 backTo(0);
+                // Logged out, so family stop seeing this phone.
+                void family.leave();
                 setProfile(null);
                 setPhase('login');
               }}
@@ -651,12 +936,18 @@ export default function App() {
             />
           )}
 
+          {privacyView.mounted && (
+            <PrivacyScreen leaving={privacyView.leaving ? leaveStyle : null} onBack={back} />
+          )}
+
           {familyView.mounted && (
             <FamilyScreen
               profile={profile}
-              hasLocation={realPos != null}
+              family={family}
+              myArea={myArea?.name ?? null}
               leaving={familyView.leaving ? leaveStyle : null}
-              onShareApp={shareApp}
+              onShowMember={showMember}
+              onToast={showToast}
               onBack={back}
             />
           )}
@@ -692,8 +983,32 @@ export default function App() {
             />
           )}
 
+          {reportInfoView.mounted && tappedReport && (
+            <ReportInfoSheet
+              report={tappedReport}
+              answered={answered.includes(tappedReport.id)}
+              leaving={reportInfoView.leaving}
+              onAnswer={answerReport}
+              onClose={back}
+            />
+          )}
+
           {feedbackView.mounted && <FeedbackSheet name={profile.name} leaving={feedbackView.leaving} onClose={back} />}
         </>
+      )}
+
+      {phase === 'join' && inviteCode && (
+        <JoinScreen
+          code={inviteCode}
+          family={family}
+          name={profile?.name ?? null}
+          onDone={(name) => {
+            setInviteCode(null);
+            hasInvite.current = false;
+            if (name) setProfile(profile ? { ...profile, name } : { name, phone: '' });
+            setPhase(name || profile ? 'app' : 'login');
+          }}
+        />
       )}
 
       {phase === 'login' && (

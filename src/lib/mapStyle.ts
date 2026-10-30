@@ -1,5 +1,7 @@
-import type { ExpressionSpecification, StyleSpecification } from 'maplibre-gl';
+import type { MultiPolygon, Polygon } from 'geojson';
+import type { ExpressionSpecification, FilterSpecification, StyleSpecification } from 'maplibre-gl';
 import type { Theme } from '../hooks/useTheme';
+import type { PlaceGroup } from './places';
 
 /*
  * OTW's own map style, drawn from OpenFreeMap's free OpenStreetMap tiles.
@@ -77,6 +79,44 @@ const PALETTES: Record<Theme, Palette> = {
   },
 };
 
+/** Text colour of our own place labels (places.ts) by kind, so a surau or petrol station stands out. */
+export const PLACE_COLORS: Record<Theme, Record<PlaceGroup | 'mine', string>> = {
+  light: {
+    surau: '#0A6B5C',
+    food: '#A4501C',
+    fuel: '#2563A8',
+    parking: '#2563A8',
+    shop: '#7445A8',
+    area: '#5B6763',
+    street: '#5B6763',
+    '': '#5B6763',
+    mine: '#15201D',
+  },
+  dark: {
+    surau: '#5FD0BC',
+    food: '#F0A36B',
+    fuel: '#7FB2EA',
+    parking: '#7FB2EA',
+    shop: '#C3A2EE',
+    area: '#9AA7A2',
+    street: '#9AA7A2',
+    '': '#9AA7A2',
+    mine: '#FFFFFF',
+  },
+};
+
+export function labelHalo(theme: Theme): string {
+  return PALETTES[theme].halo;
+}
+
+export const POI_LABEL_LAYER = 'poi-label';
+
+/** OpenFreeMap's own shop/place labels; hidden inside `ownArea`, where our fuller list draws its own. */
+export function poiLabelFilter(ownArea?: Polygon | MultiPolygon): FilterSpecification {
+  const rank: FilterSpecification = ['<=', ['get', 'rank'], 12];
+  return ownArea ? ['all', rank, ['!', ['within', ownArea]]] : rank;
+}
+
 const FONT_REGULAR = ['Noto Sans Regular'];
 const FONT_BOLD = ['Noto Sans Bold'];
 const NAME: ExpressionSpecification = ['coalesce', ['get', 'name:latin'], ['get', 'name']];
@@ -153,6 +193,9 @@ const ROADS: {
     casingColor: (p) => p.motorwayCasing,
   },
 ];
+
+/** Layer id of the 3D buildings, hidden unless driving. */
+export const BUILDINGS_3D = 'building-3d';
 
 export function buildMapStyle(theme: Theme): StyleSpecification {
   const p = PALETTES[theme];
@@ -259,6 +302,31 @@ export function buildMapStyle(theme: Theme): StyleSpecification {
       ...roadLayers('', notBridgeOrTunnel),
       ...roadLayers('-bridge', isBridge),
       {
+        // Raised buildings for the tilted driving view (switched on by MapView).
+        // Most buildings in Sabah have no height in OpenStreetMap, so they get a
+        // low 5 m; they rise as you zoom in so they don't pop up all at once.
+        id: BUILDINGS_3D,
+        type: 'fill-extrusion',
+        source: 'omt',
+        'source-layer': 'building',
+        minzoom: 15,
+        layout: { visibility: 'none' },
+        paint: {
+          'fill-extrusion-color': p.building,
+          'fill-extrusion-opacity': 0.85,
+          'fill-extrusion-height': [
+            'interpolate',
+            ['linear'],
+            ['zoom'],
+            15,
+            0,
+            16,
+            ['coalesce', ['get', 'render_height'], 5],
+          ],
+          'fill-extrusion-base': ['coalesce', ['get', 'render_min_height'], 0],
+        },
+      },
+      {
         id: 'water-label',
         type: 'symbol',
         source: 'omt',
@@ -284,12 +352,12 @@ export function buildMapStyle(theme: Theme): StyleSpecification {
         paint: { 'text-color': p.roadText, 'text-halo-color': p.halo, 'text-halo-width': 1.6 },
       },
       {
-        id: 'poi-label',
+        id: POI_LABEL_LAYER,
         type: 'symbol',
         source: 'omt',
         'source-layer': 'poi',
         minzoom: 15,
-        filter: ['<=', ['get', 'rank'], 12],
+        filter: poiLabelFilter(),
         layout: {
           'text-field': NAME,
           'text-font': FONT_REGULAR,

@@ -40,6 +40,7 @@ function describeEn(step: StepLike): string {
     case 'end of road':
       if (dir === 'uturn') return `Make a U-turn${onto}`;
       if (dir === 'straight') return `Go straight${onto}`;
+      if (dir.startsWith('slight')) return `Turn slightly ${side(dir)}${onto}`;
       return `Turn ${dir}${onto}`;
     case 'new name':
     case 'continue':
@@ -94,6 +95,43 @@ export function instruction(step: StepLike, lang: Lang): string {
   return lang === 'ms' ? describeMs(step) : describeEn(step);
 }
 
+/**
+ * Whether a step is said out loud. Steps where the driver just carries on along
+ * the road ("Continue on Jalan Lintas", "Go straight" as the name changes) are
+ * shown on screen but not spoken, so the voice only talks when there's
+ * something to do.
+ */
+export function worthSaying(step: Pick<RouteStep, 'type' | 'modifier'>): boolean {
+  switch (step.type) {
+    case 'depart':
+    case 'notification':
+    case 'exit roundabout':
+    case 'exit rotary':
+      return false;
+    case 'new name':
+    case 'continue':
+    case 'turn':
+      return step.modifier != null && step.modifier !== 'straight';
+    default:
+      return true;
+  }
+}
+
+/** The next step the driver has to act on, from `index` on, and the metres to it. */
+export function nextAction(
+  steps: Pick<RouteStep, 'type' | 'modifier' | 'distance'>[],
+  index: number,
+  metres: number,
+): { index: number; distance: number } {
+  let i = index;
+  let d = metres;
+  while (i < steps.length - 1 && !worthSaying(steps[i])) {
+    d += steps[i].distance;
+    i++;
+  }
+  return { index: i, distance: d };
+}
+
 /** The small "then…" line under the instruction card. */
 export function thenText(step: StepLike, lang: Lang): string {
   return `${lang === 'ms' ? 'Kemudian' : 'Then'} ${lowerFirst(instruction(step, lang))}`;
@@ -122,6 +160,7 @@ const HAZARD_NAMES: Record<HazardType, Record<Lang, string>> = {
   roadblock: { en: 'Roadblock', ms: 'Sekatan jalan' },
   hazard: { en: 'Object on the road', ms: 'Objek di jalan' },
   pothole: { en: 'Pothole', ms: 'Lubang jalan' },
+  camera: { en: 'Speed camera', ms: 'Kamera laju' },
 };
 
 export function hazardName(type: HazardType, lang: Lang): string {
@@ -130,15 +169,21 @@ export function hazardName(type: HazardType, lang: Lang): string {
 
 /** Spoken when a report is on the road ahead: "Flood reported ahead, in 600 metres." */
 export function hazardPhrase(type: HazardType, metres: number, lang: Lang): string {
+  if (type === 'camera') {
+    return lang === 'ms'
+      ? `Kamera laju di depan, dalam ${spokenDistance(metres, lang)}. Jaga kelajuan.`
+      : `Speed camera ahead, in ${spokenDistance(metres, lang)}. Watch your speed.`;
+  }
   return lang === 'ms'
     ? `${hazardName(type, lang)} dilaporkan di depan, dalam ${spokenDistance(metres, lang)}.`
     : `${hazardName(type, lang)} reported ahead, in ${spokenDistance(metres, lang)}.`;
 }
 
-export const PHRASES: Record<'start' | 'arrived' | 'rerouted' | 'test', Record<Lang, string>> = {
+export const PHRASES: Record<'start' | 'arrived' | 'rerouted' | 'stopAdded' | 'test', Record<Lang, string>> = {
   start: { en: 'Jom! Let’s go.', ms: 'Jom! Kita gerak.' },
   arrived: { en: 'You have arrived. Dah sampai!', ms: 'Dah sampai! Anda telah tiba.' },
   rerouted: { en: 'Route updated.', ms: 'Laluan dikemas kini.' },
+  stopAdded: { en: 'Stop added. Route updated.', ms: 'Hentian ditambah. Laluan dikemas kini.' },
   test: {
     en: 'In 300 metres, turn left onto Jalan Ampang.',
     ms: 'Dalam 300 meter, belok kiri ke Jalan Ampang.',

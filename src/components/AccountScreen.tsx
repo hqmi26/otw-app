@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { APP_VERSION, initials, type Profile } from '../lib/models';
 import type { Lang } from '../lib/instructions';
 import type { Theme } from '../hooks/useTheme';
-import { BackIcon, ChatIcon, MoonIcon, SoundIcon } from './icons';
+import { BackIcon, ChatIcon, LockIcon, MoonIcon, SoundIcon } from './icons';
 
 interface Props {
   profile: Profile;
@@ -14,12 +14,14 @@ interface Props {
   onLang: (lang: Lang) => void;
   onTestVoice: (lang: Lang) => void;
   onFeedback: () => void;
+  onPrivacy: () => void;
   onLogout: () => void;
   onBack: () => void;
 }
 
 function maskPhone(digits: string) {
-  return `+60 ••• •••• ${digits.slice(-4)}`;
+  // Family who joined from an invite link only gave a name.
+  return digits ? `+60 ••• •••• ${digits.slice(-4)}` : 'Joined with a family invite';
 }
 
 /** Account (design screen 7). */
@@ -152,6 +154,17 @@ export default function AccountScreen(p: Props) {
         </div>
 
         <h2 className="section-label">About</h2>
+        <div className="card list">
+          <button type="button" className="row" onClick={p.onPrivacy}>
+            <span className="row-icon tinted">
+              <LockIcon size={20} />
+            </span>
+            <span className="row-text">
+              <span className="row-title">Privacy &amp; data</span>
+              <span className="row-sub">What stays on your phone, and what doesn’t</span>
+            </span>
+          </button>
+        </div>
         <div className="card">
           <div className="info-row">
             <span>Version</span>

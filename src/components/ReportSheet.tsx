@@ -10,7 +10,7 @@ interface Props {
   onClose: () => void;
 }
 
-/** Report a hazard (design screen 6). Saved on this phone until family sharing exists. */
+/** Report a hazard (design screen 6). Shared with drivers nearby; kept on this phone if offline. */
 export default function ReportSheet({ hasLocation, leaving, onSend, onClose }: Props) {
   const [type, setType] = useState<HazardType>('flood');
   const [note, setNote] = useState('');
@@ -58,7 +58,7 @@ export default function ReportSheet({ hasLocation, leaving, onSend, onClose }: P
 
         <p className="privacy-note">
           <LockIcon size={18} />
-          Saved on this phone for now · clears after 2 hours
+          Shown to OTW drivers nearby, without your name · {type === 'camera' ? 'kept for 30 days' : 'clears after 2 hours'}
         </p>
 
         <button type="button" className="report-send" disabled={!hasLocation} onClick={() => onSend(type, note.trim())}>
