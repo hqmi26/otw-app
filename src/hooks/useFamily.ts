@@ -120,22 +120,27 @@ export type Family = ReturnType<typeof useFamily>;
 
 /** Work the area out again after moving this far. */
 const AREA_RECHECK_M = 150;
+/** With no name yet (no signal), try again this often even without moving. */
+const AREA_RETRY_MS = 30000;
 
-/** The area you're in (e.g. Likas), worked out on the phone. Null while off. */
+/** The area you're in (e.g. Likas). Null while off. */
 export function useArea(position: LngLat | null): Area | null {
   const [area, setArea] = useState<Area | null>(null);
-  const checkedAt = useRef<LngLat | null>(null);
+  const last = useRef<{ at: LngLat; time: number; found: boolean } | null>(null);
   useEffect(() => {
     if (!position) return;
-    if (checkedAt.current && distance(checkedAt.current, position) < AREA_RECHECK_M) return;
-    checkedAt.current = position;
+    const l = last.current;
+    if (l && distance(l.at, position) < AREA_RECHECK_M && (l.found || Date.now() - l.time < AREA_RETRY_MS)) return;
+    const lookup = { at: position, time: Date.now(), found: false };
+    last.current = lookup;
     // Not cancelled when the next fix comes in: GPS fixes arrive faster than
-    // the area list loads, and a nearby fix doesn't start a new lookup.
-    areaAt(position)
-      .then((a) => setArea((old) => (old?.name === a.name ? old : a)))
-      .catch(() => {
-        checkedAt.current = null; // try again on the next fix
-      });
+    // the answer does, and a nearby fix doesn't start a new lookup.
+    void areaAt(position).then((a) => {
+      // A newer lookup wins; with no name at all, the last area stays.
+      if (last.current !== lookup || !a) return;
+      lookup.found = true;
+      setArea((old) => (old?.name === a.name ? old : a));
+    });
   }, [position]);
   return position ? area : null;
 }

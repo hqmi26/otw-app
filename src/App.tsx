@@ -670,7 +670,8 @@ export default function App() {
 
   // --- Family sharing: your area always, the trip ETA while driving, and the
   // moving car only when "Share live trip" was switched on for this trip. ---
-  const myArea = useArea(phase === 'app' && family.inFamily ? realPos : null);
+  // Not looked up on Private: nothing about you goes anywhere for it.
+  const myArea = useArea(phase === 'app' && canShare ? realPos : null);
   // Once arrived, sharing stays off even if the car moves again before Done is tapped.
   const tripFinished = useRef(false);
   if (progress?.arrived) tripFinished.current = true;

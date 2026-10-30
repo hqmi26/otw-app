@@ -1,9 +1,10 @@
+import { areaNames, type AreaNames } from './api';
 import { distance, formatClock, type LngLat } from './geo';
 
 /**
  * Family sharing, talking to the OTW server (functions/api/family). Family see
- * each other's area, like Likas, never the exact spot: the area is worked out
- * here on the phone before anything is sent.
+ * each other's area, like Likas, never the exact spot: the phone rounds the
+ * spot to about 1 km before anything is sent.
  */
 
 export const MAX_FAMILY = 10;
@@ -139,17 +140,26 @@ export function memberLine(m: FamilyMember, nowS = Date.now() / 1000): string {
 
 // --- Area names (kawasan) ---
 
+/** Names of buildings, not areas. */
+const NOT_AN_AREA = /plaza|kompleks|complex|mall|square|centre|center|menara|wisma|hotel|tower/i;
+/** "Seksyen 14" means nothing without its town. */
+const NEEDS_TOWN = /^(seksyen|section|ss|usj|pju|blok)\b/i;
+
+/** The closest name people would know, or null if all that's left is too wide. */
+function closestName({ locality, district, city, county }: AreaNames): string | null {
+  const near = [locality, district].find((n) => n && !NOT_AN_AREA.test(n));
+  if (near) return NEEDS_TOWN.test(near) && city ? `${near}, ${city}` : near;
+  // A city as wide as its whole district, like Kota Kinabalu, says too little.
+  return city && !county?.startsWith(city) ? city : null;
+}
+
 type AreaRow = [name: string, lat: number, lng: number];
-/** Further than this from every Sabah place we know, the area is just "Outside Sabah". */
-const OUTSIDE_M = 30000;
+/** Further than this from every Sabah place we know, the list has no name for the spot. */
+const LIST_REACH_M = 30000;
 let areaList: Promise<AreaRow[]> | null = null;
 
-/**
- * The area around a spot, from a list of Sabah towns and villages kept in the
- * app (scripts/sabah-areas.mjs). The spot itself never leaves the phone: only
- * the area's name and its middle point are shared.
- */
-export async function areaAt(coord: LngLat): Promise<Area> {
+/** The nearest town or village in the list kept in the app (scripts/sabah-areas.mjs). Sabah only. */
+async function areaFromList(coord: LngLat): Promise<Area | null> {
   areaList ??= import('./sabahAreas.json').then((m) => m.default as AreaRow[]);
   const list = await areaList;
   let best: AreaRow | null = null;
@@ -161,8 +171,21 @@ export async function areaAt(coord: LngLat): Promise<Area> {
       best = row;
     }
   }
-  if (!best || bestM > OUTSIDE_M) {
-    return { name: 'Outside Sabah', lat: Math.round(coord[1] * 10) / 10, lng: Math.round(coord[0] * 10) / 10 };
-  }
-  return { name: best[0], lat: best[1], lng: best[2] };
+  return best && bestM <= LIST_REACH_M ? { name: best[0], lat: best[1], lng: best[2] } : null;
+}
+
+/**
+ * The area around a spot, for family to see. Online covers all of Malaysia;
+ * the list fills in when online's answer is too wide or there's no signal.
+ * Null when neither has a name (no signal outside Sabah): keep the last area.
+ */
+export async function areaAt(coord: LngLat): Promise<Area | null> {
+  const names = await areaNames(coord).catch(() => null);
+  const name = names && closestName(names);
+  const [lng, lat] = coord.map((v) => Math.round(v * 100) / 100);
+  if (name) return { name, lat, lng };
+  const listed = await areaFromList(coord);
+  if (listed) return listed;
+  const wide = names?.city ?? names?.county;
+  return wide ? { name: wide, lat, lng } : null;
 }

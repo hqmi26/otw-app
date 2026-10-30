@@ -23,8 +23,8 @@ CREATE TABLE IF NOT EXISTS members (
   seen_at INTEGER,                     -- last time the phone checked in
   private INTEGER NOT NULL DEFAULT 0,  -- 1 = hidden: the area, trip and live fields stay empty
 
-  -- Area only, worked out on the phone (e.g. Likas).
-  -- area_lat/area_lng is the middle of the area, not where the person is.
+  -- Area only (e.g. Likas), with no exact spot.
+  -- area_lat/area_lng is a rough point (about 1 km), not where the person is.
   area TEXT,
   area_lat REAL,
   area_lng REAL,

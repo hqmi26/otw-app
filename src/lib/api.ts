@@ -5,6 +5,7 @@ import type { PlaceGroup } from './places';
 /*
  * Free public services, no API keys:
  *  - Photon (komoot) for place search outside Sabah (Sabah is searched on the phone, see places.ts)
+ *    and for the area names family see, sent only a spot rounded to about 1 km
  *  - Valhalla (FOSSGIS) for driving routes: it offers 2–3 different routes, where
  *    the OSRM demo server finds only one in KK. OSRM stays as the backup.
  * All are fine for family testing (Valhalla allows one request a second). For a
@@ -31,6 +32,7 @@ interface PhotonFeature {
     name?: string;
     street?: string;
     housenumber?: string;
+    locality?: string;
     district?: string;
     city?: string;
     county?: string;
@@ -100,6 +102,34 @@ export async function reverseGeocode(coord: LngLat, signal?: AbortSignal): Promi
   const data = (await res.json()) as { features: PhotonFeature[] };
   const place = data.features[0] ? toPlace(data.features[0], 0) : null;
   return place ? { name: place.name, subtitle: place.subtitle } : null;
+}
+
+/** The names of where a spot is, smallest first. Any of them can be missing. */
+export interface AreaNames {
+  locality?: string;
+  district?: string;
+  city?: string;
+  county?: string;
+}
+
+/** Areas don't move, so each square of about 1 km is only asked about once an hour. */
+const areaMemory = shortMemory<AreaNames>(60 * 60_000);
+
+/** What the area around a spot is called. The spot is rounded to about 1 km before it's sent. */
+export async function areaNames(coord: LngLat): Promise<AreaNames | null> {
+  const [lon, lat] = coord.map((v) => v.toFixed(2));
+  const memoryKey = `${lon},${lat}`;
+  const remembered = areaMemory.get(memoryKey);
+  if (remembered) return remembered;
+  const params = new URLSearchParams({ lon, lat, limit: '1' });
+  const res = await ask('photon', `${PHOTON_URL.replace('/api/', '/reverse')}?${params}`, { timeoutMs: 6000 });
+  if (!res.ok) return null;
+  const data = (await res.json()) as { features: PhotonFeature[] };
+  const p = data.features[0]?.properties;
+  if (!p) return null;
+  const names: AreaNames = { locality: p.locality, district: p.district, city: p.city, county: p.county };
+  areaMemory.set(memoryKey, names);
+  return names;
 }
 
 /** One manoeuvre. Text is made from these at display time, in the chosen language. */
