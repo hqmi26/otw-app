@@ -26,6 +26,8 @@ export interface Progress {
 const OFF_ROUTE_M = 45;
 const SNAP_M = 30;
 const ARRIVED_M = 25;
+/** Parked off the road at the destination still counts, but further than this is overshooting it. */
+const ARRIVED_NEAR_M = 150;
 
 /** Where the driver is on the route and what comes next. */
 export function useNavProgress(route: Route | null, position: LngLat | null): Progress | null {
@@ -49,7 +51,7 @@ export function useNavProgress(route: Route | null, position: LngLat | null): Pr
       remainingTime: route.duration * (remaining / Math.max(1, prepared.total)),
       covered: snap.along,
       offRoute: snap.offset > OFF_ROUTE_M,
-      arrived: remaining < ARRIVED_M,
+      arrived: remaining < ARRIVED_M && snap.offset < ARRIVED_NEAR_M,
       onRoad: snap.offset <= SNAP_M ? pointAlong(route.coords, prepared.cum, snap.along) : null,
     };
   }, [route, prepared, position]);
