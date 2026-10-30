@@ -138,17 +138,13 @@ export function useArea(position: LngLat | null): Area | null {
     if (!position) return;
     if (checkedAt.current && distance(checkedAt.current, position) < AREA_RECHECK_M) return;
     checkedAt.current = position;
-    let live = true;
+    // Not cancelled when the next fix comes in: GPS fixes arrive faster than
+    // the area list loads, and a nearby fix doesn't start a new lookup.
     areaAt(position)
-      .then((a) => {
-        if (live) setArea((old) => (old?.name === a.name ? old : a));
-      })
+      .then((a) => setArea((old) => (old?.name === a.name ? old : a)))
       .catch(() => {
         checkedAt.current = null; // try again on the next fix
       });
-    return () => {
-      live = false;
-    };
   }, [position]);
   return position ? area : null;
 }

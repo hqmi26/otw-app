@@ -268,6 +268,7 @@ export default function App() {
     const route = routes[selected];
     spoken.current.clear();
     pace.current = null;
+    tripFinished.current = false;
     tripRush.current = rushHourFactor(new Date());
     setActiveRoute(route);
     go('nav');
@@ -517,9 +518,12 @@ export default function App() {
   // --- Family sharing: your area always, the trip ETA while driving, and the
   // moving car only when "Share live trip" was switched on for this trip. ---
   const myArea = useArea(phase === 'app' && family.inFamily ? realPos : null);
+  // Once arrived, sharing stays off even if the car moves again before Done is tapped.
+  const tripFinished = useRef(false);
+  if (progress?.arrived) tripFinished.current = true;
   // A demo drive (no GPS) isn't real, so family don't see it, unless testing with ?sim.
   const tripShare =
-    canShare && base === 'nav' && destination && progress && !progress.arrived && remainingTime != null && (!simulate || FORCE_SIM)
+    canShare && base === 'nav' && destination && progress && !tripFinished.current && remainingTime != null && (!simulate || FORCE_SIM)
       ? { to: savedAs ?? destination.name, eta: Math.round(Date.now() / 1000 + remainingTime) }
       : null;
   const liveShare =
