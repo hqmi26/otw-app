@@ -33,7 +33,7 @@ const FLOWS: Flow[] = [
   {
     icon: <UsersIcon size={20} />,
     title: 'Family',
-    text: 'Only if you join a family: your area (e.g. Likas), and where you’re driving to with the arrival time. Your exact spot only while “Share live trip” is on. Switch on Private to hide it all. No history is kept.',
+    text: 'Only if you join a family: your area (e.g. Likas), and where you’re driving to with the arrival time. To name your area, a spot rounded to about 1 km goes to Photon (Germany). Your exact spot only while “Share live trip” is on. Switch on Private to hide it all, and nothing is looked up. No history is kept.',
   },
   {
     icon: <AlertIcon size={20} />,

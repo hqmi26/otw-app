@@ -137,7 +137,7 @@ OpenStreetMap's is ODbL; the map credit names both.
 |---|---|---|
 | Map tiles | OpenFreeMap (OpenStreetMap data) | Free, no limits |
 | Search in Sabah | Our own list (`public/places/sabah.json`) | Searched on the phone |
-| Search elsewhere | Photon public server | Fair use only |
+| Search elsewhere, family area names | Photon public server | Fair use only. Area names send only a spot rounded to about 1 km, at most once an hour for each square |
 | Routing | FOSSGIS Valhalla server (OSRM demo server as backup) | Low use only, one request a second. Gives 2–3 routes; OSRM finds only one in KK |
 | Feedback, reports, usage count, family | Cloudflare Pages Functions + D1 | Free tier |
 | Traffic lights | OpenStreetMap (Overpass), saved in `public/map/` | Refreshed by hand |
