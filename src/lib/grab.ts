@@ -1,13 +1,18 @@
 import type { Place, Route, RouteStep } from './api';
 import { distance, type LngLat } from './geo';
+import { ask as askService } from './net';
 
 /*
  * GrabMaps, through our own /api/geo server (functions/api/geo). It holds the
  * Amazon key. When it isn't set up, api.ts and search.ts use the free services.
  *
- * Amazon's rules: a GrabMaps result may only be kept on the phone (saved places,
- * recents) if it was asked for as Storage, so those go through keepPlace first.
+ * Amazon's rules: a GrabMaps result may only be kept (saved places, recents, the
+ * trip name on the family server) if it was asked for as Storage, so those go
+ * through keepPlace first. Routes can't be cached at all.
  */
+
+/** A slow or hung call gives up after this, so the free services can take over. */
+const GEO_TIMEOUT_MS = 8000;
 
 export interface GeoStatus {
   grab: boolean;
@@ -19,7 +24,7 @@ let status: Promise<GeoStatus> | null = null;
 
 /** What the server has keys for. Asked once; a failed ask (e.g. offline) is tried again next time. */
 export function geoStatus(): Promise<GeoStatus> {
-  status ??= fetch('/api/geo/status')
+  status ??= askService('grab', '/api/geo/status', { timeoutMs: GEO_TIMEOUT_MS })
     .then((res) => (res.ok ? (res.json() as Promise<GeoStatus>) : OFF))
     .catch(() => {
       status = null;
@@ -29,11 +34,10 @@ export function geoStatus(): Promise<GeoStatus> {
 }
 
 async function ask<T>(action: string, body: object, signal?: AbortSignal): Promise<T> {
-  const res = await fetch(`/api/geo/${action}`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(body),
+  const res = await askService('grab', `/api/geo/${action}`, {
     signal,
+    timeoutMs: GEO_TIMEOUT_MS,
+    init: { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) },
   });
   if (!res.ok) throw new Error(`GrabMaps failed (${res.status})`);
   return (await res.json()) as T;
@@ -87,6 +91,9 @@ export async function grabReverse(coord: LngLat): Promise<Place | null> {
   return found ? toPlace(found) : null;
 }
 
+/** A place whose name may be kept as it is: our own, or already asked for as Storage. */
+export const canKeep = (place: Place) => !place.id.startsWith(GRAB_ID) || place.stored === true;
+
 /** How close a Storage result must be to count as the same place. */
 const SAME_PLACE_M = 300;
 
@@ -95,7 +102,7 @@ const SAME_PLACE_M = 300;
  * nothing; a GrabMaps result is asked for again as Storage. Null: it can't be kept.
  */
 export async function keepPlace(place: Place): Promise<Place | null> {
-  if (!place.id.startsWith(GRAB_ID) || place.stored) return place;
+  if (canKeep(place)) return place;
   const data = await ask<{ ResultItems?: AwsPlace[] }>('keep', { name: place.name, near: place.coord });
   const found = (data.ResultItems ?? [])
     .map((p) => toPlace(p))

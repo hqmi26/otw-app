@@ -35,7 +35,7 @@ import {
 import { aheadPhrase, hazardPhrase, instruction, nextAction, PHRASES, worthSaying, type Lang } from './lib/instructions';
 import { rushHourFactor } from './lib/eta';
 import { DEFAULT_CAR, isCarLook, type CarLook } from './lib/car';
-import { keepPlace } from './lib/grab';
+import { canKeep, keepPlace } from './lib/grab';
 import { isMapDesign, type MapDesign } from './lib/mapStyle';
 import {
   HAZARDS,
@@ -203,6 +203,8 @@ export default function App() {
   const [placeToSave, setPlaceToSave] = useState<Place | null>(null);
   /** A stop on the way, e.g. fetching Adik from school on the way home. */
   const [stop, setStop] = useState<Place | null>(null);
+  /** The destination's name once it may be kept (GrabMaps results have to be asked for again). */
+  const [keptTrip, setKeptTrip] = useState<{ id: string; name: string } | null>(null);
   /** Family see the car move on this trip. Set before Start; off again after every trip. */
   const [shareLive, setShareLive] = useState(false);
   const [pickStart, setPickStart] = useState<LngLat | null>(null);
@@ -273,7 +275,11 @@ export default function App() {
     // A place that can't be kept is still driven to, just not listed in recents.
     if (remember) {
       keepPlace(place)
-        .then((kept) => kept && addRecent(kept))
+        .then((kept) => {
+          if (!kept) return;
+          addRecent(kept);
+          setKeptTrip({ id: place.id, name: kept.name });
+        })
         .catch(() => {});
     }
     setDestination(place);
@@ -694,10 +700,15 @@ export default function App() {
   // Once arrived, sharing stays off even if the car moves again before Done is tapped.
   const tripFinished = useRef(false);
   if (progress?.arrived) tripFinished.current = true;
+  // The family server keeps this name during the trip, so a GrabMaps name must be a kept one.
+  const tripNameForFamily =
+    savedAs ??
+    (destination && canKeep(destination) ? destination.name : null) ??
+    (keptTrip && keptTrip.id === destination?.id ? keptTrip.name : 'a place');
   // A demo drive (no GPS) isn't real, so family don't see it, unless testing with ?sim.
   const tripShare =
     canShare && base === 'nav' && destination && progress && !tripFinished.current && remainingTime != null && (!simulate || FORCE_SIM)
-      ? { to: savedAs ?? destination.name, eta: Math.round(Date.now() / 1000 + remainingTime) }
+      ? { to: tripNameForFamily, eta: Math.round(Date.now() / 1000 + remainingTime) }
       : null;
   const liveShare =
     tripShare && shareLive && shownNavPos ? { lat: shownNavPos[1], lng: shownNavPos[0], heading: travelHeading } : null;

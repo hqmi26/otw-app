@@ -246,9 +246,8 @@ export async function getRoutes(
   if (remembered) return remembered;
   if ((await geoStatus()).grab) {
     try {
-      const routes = await grabRoutes(points, choices && !stop, stop ?? null, signal);
-      routeMemory.set(memoryKey, routes);
-      return routes;
+      // Not kept in routeMemory: Amazon's rules (82.4.a) don't allow caching GrabMaps routes.
+      return await grabRoutes(points, choices && !stop, stop ?? null, signal);
     } catch (e) {
       if ((e as Error).name === 'AbortError') throw e; // otherwise the free services below take over
     }

@@ -511,7 +511,8 @@ export default function MapView(props: Props) {
       const p = latest.current;
       addRouteLayers(map, shownTheme.current, shownData.current);
       (map.getSource(SOURCE) as GeoJSONSource).setData(routeData(p.routes, p.selectedRoute, p.mode));
-      addSignalLayer(map);
+      // OpenStreetMap data, so it stays off GrabMaps' map, like our place labels.
+      if (!shownData.current.grab) addSignalLayer(map);
       showBuildings3d(map, shownTheme.current, p.buildings3d && p.mode === 'nav');
       addPlaceLayers(map, shownTheme.current, shownData.current.grab, p.places, p.myPlaces);
       showPlaceLabels(map, p.mode !== 'nav');
