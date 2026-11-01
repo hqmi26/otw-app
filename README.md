@@ -113,6 +113,9 @@ Monochrome, or our own styles from `src/lib/mapStyle.ts` on GrabMaps' tiles: OTW
 Night drive (always dark) and Big text. Each phone remembers its own choice. On the free
 map there's only OTW's style, so the choice is hidden. Satellite isn't available for GrabMaps.
 
+Standard has Amazon's place icons. The other designs get OTW's own (`src/lib/poiIcons.ts`),
+drawn from the `poi` layer of the same tiles.
+
 **Auto day and night** turns dark mode on at sunset and off at sunrise,
 worked out from where the phone is (`sunIsDown` in `src/lib/geo.ts`), so it needs no service.
 

@@ -171,6 +171,13 @@ export function labelHalo(theme: Theme): string {
   return PALETTES[theme].halo;
 }
 
+/** Colour of a place's name under its icon. */
+export function poiTextColor(theme: Theme, design: MapDesign): string {
+  return (design === 'night' ? NIGHT_PALETTE : PALETTES[theme]).poiText;
+}
+
+export const designTextScale = (design: MapDesign) => (design === 'bigtext' ? BIG_TEXT : 1);
+
 export const POI_LABEL_LAYER = 'poi-label';
 
 /** OpenFreeMap's own shop/place labels; hidden inside `ownArea`, where our fuller list draws its own. */
@@ -262,7 +269,7 @@ export function buildMapStyle(
   design: MapDesign = 'otw',
 ): StyleSpecification {
   const p = design === 'night' ? NIGHT_PALETTE : PALETTES[theme];
-  const scale = design === 'bigtext' ? BIG_TEXT : 1;
+  const scale = designTextScale(design);
   const textByZoom = (zoomA: number, sizeA: number, zoomB: number, sizeB: number): ExpressionSpecification => [
     'interpolate',
     ['linear'],
@@ -397,8 +404,7 @@ export function buildMapStyle(
         type: 'symbol',
         source: 'omt',
         'source-layer': 'poi',
-        // Night drive keeps shop names out of the way until you zoom right in.
-        minzoom: design === 'night' ? 18 : 15,
+        minzoom: 15,
         filter: poiLabelFilter(),
         layout: {
           'text-field': NAME,
