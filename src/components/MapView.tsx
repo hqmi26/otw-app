@@ -16,8 +16,18 @@ import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?url';
 // MapLibre 6 loads its tile worker from a separate file; point it at the copy Vite serves.
 setWorkerUrl(workerUrl);
 import type { Place, Route } from '../lib/api';
+import { carSvg, type CarLook } from '../lib/car';
 import type { LngLat } from '../lib/geo';
-import { BUILDINGS_3D, buildMapStyle, labelHalo, PLACE_COLORS, POI_LABEL_LAYER, poiLabelFilter } from '../lib/mapStyle';
+import type { GeoStatus } from '../lib/grab';
+import {
+  buildMapStyle,
+  grabTiles,
+  labelHalo,
+  PLACE_COLORS,
+  POI_LABEL_LAYER,
+  poiLabelFilter,
+  type MapDesign,
+} from '../lib/mapStyle';
 import { HAZARDS, myPlaceToPlace, type HazardReport, type MyPlace } from '../lib/models';
 import { mapFeatures, toPlace, type PlacesIndex } from '../lib/places';
 import type { Theme } from '../hooks/useTheme';
@@ -33,6 +43,34 @@ export const DEFAULT_CENTER: LngLat = [116.0762, 5.9836];
 const SOURCE = 'otw-routes';
 const CASING_LAYER = 'otw-route-casing';
 const LINE_LAYER = 'otw-route-line';
+
+const BUILDINGS_3D_LAYER = 'otw-buildings-3d';
+const BUILDING_COLORS: Record<Theme, string> = { light: '#DDE1D8', dark: '#2A3431' };
+/** Buildings grow out of the ground between these zooms. */
+const BUILDINGS_RISE_ZOOM: [number, number] = [14.5, 15.5];
+/** Height for a building whose height isn't known. */
+const BUILDING_DEFAULT_M = 5;
+
+const TRAFFIC_SOURCE = 'otw-traffic';
+const TRAFFIC_LAYER = 'otw-traffic-flow';
+const GRAB_STYLE_PATH = '/api/geo/map/style';
+
+/** The chosen design on GrabMaps' tiles, or OTW's style on the free map. */
+function styleFor(theme: Theme, grab: boolean, design: MapDesign) {
+  if (!grab) return buildMapStyle(theme);
+  if (design !== 'standard' && design !== 'monochrome') return buildMapStyle(theme, grabTiles(), design);
+  const look = `scheme=${theme === 'dark' ? 'Dark' : 'Light'}&design=${design === 'monochrome' ? 'Monochrome' : 'Standard'}`;
+  return `${window.location.origin}${GRAB_STYLE_PATH}?${look}`;
+}
+
+/** The font the style's own labels use: another style's font wouldn't draw. */
+function labelFont(map: MapLibreMap): string[] {
+  for (const layer of map.getStyle().layers ?? []) {
+    const font = layer.type === 'symbol' ? layer.layout?.['text-font'] : undefined;
+    if (Array.isArray(font)) return (font[0] === 'literal' ? font[1] : font) as string[];
+  }
+  return ['Noto Sans Bold'];
+}
 
 const PLACES_SOURCE = 'otw-places';
 const MINE_SOURCE = 'otw-my-places';
@@ -60,6 +98,13 @@ export interface FamilyPin {
 
 interface Props {
   theme: Theme;
+  /** Which paid map data the server is set up for. */
+  mapData: GeoStatus;
+  /** How the GrabMaps map looks. */
+  mapDesign: MapDesign;
+  buildings3d: boolean;
+  /** The marker shown while driving. */
+  car: CarLook;
   mode: MapMode;
   position: LngLat | null;
   heading: number | null;
@@ -117,18 +162,31 @@ function routeData(routes: Route[] | null, selected: number, mode: MapMode): Fea
   };
 }
 
-function addRouteLayers(map: MapLibreMap, theme: Theme) {
+function addRouteLayers(map: MapLibreMap, theme: Theme, data: GeoStatus) {
   if (map.getSource(SOURCE)) return;
   const c = ROUTE_COLORS[theme];
   // Draw above every road (bridges included) but under the place and street names.
   const layers = map.getStyle().layers ?? [];
   const lastRoad = layers.reduce((last, l, i) => (l.type === 'line' ? i : last), -1);
   const firstLabel = layers.slice(lastRoad + 1).find((l) => l.type === 'symbol')?.id;
+  if (data.traffic) {
+    map.addSource(TRAFFIC_SOURCE, {
+      type: 'raster',
+      tiles: [`${window.location.origin}/api/geo/traffic/{z}/{x}/{y}`],
+      tileSize: 512,
+      minzoom: 7,
+      maxzoom: 18,
+      attribution: 'Traffic © <a href="https://www.tomtom.com" target="_blank">TomTom</a>',
+    });
+    map.addLayer({ id: TRAFFIC_LAYER, type: 'raster', source: TRAFFIC_SOURCE, paint: { 'raster-opacity': 0.9 } }, firstLabel);
+  }
   map.addSource(SOURCE, {
     type: 'geojson',
     data: routeData(null, 0, 'browse'),
     // The FOSSGIS route server asks for this credit, a "fix the map" link and a contact email.
+    // Amazon asks for a link to its page on where the map data comes from.
     attribution:
+      `${data.grab ? 'Map data <a href="https://docs.aws.amazon.com/location/latest/developerguide/data-attribution.html" target="_blank">GrabMaps, Amazon Location</a> · ' : ''}` +
       'Routes <a href="https://valhalla1.openstreetmap.de" target="_blank">FOSSGIS Valhalla</a>, <a href="https://project-osrm.org" target="_blank">OSRM</a> · <a href="https://www.openstreetmap.org/fixthemap" target="_blank">Fix the map</a> · Contact <a href="mailto:otwapp.malaysia@gmail.com">otwapp.malaysia@gmail.com</a>',
   });
   map.addLayer(
@@ -229,9 +287,36 @@ function addSignalLayer(map: MapLibreMap) {
   void loadSignals().then((data) => (map.getSource(SIGNALS_SOURCE) as GeoJSONSource | undefined)?.setData(data));
 }
 
-/** Raised 3D buildings only in the tilted driving view; flat everywhere else. */
-function show3dBuildings(map: MapLibreMap, mode: MapMode) {
-  if (map.getLayer(BUILDINGS_3D)) map.setLayoutProperty(BUILDINGS_3D, 'visibility', mode === 'nav' ? 'visible' : 'none');
+/** Stands the map's own buildings up, under the route line. Every style here has their heights. */
+function showBuildings3d(map: MapLibreMap, theme: Theme, on: boolean) {
+  if (map.getLayer(BUILDINGS_3D_LAYER)) map.removeLayer(BUILDINGS_3D_LAYER);
+  const flat = map.getStyle().layers?.find((l) => 'source-layer' in l && l['source-layer'] === 'building');
+  if (!on || !flat || !('source' in flat)) return;
+  const [low, high] = BUILDINGS_RISE_ZOOM;
+  map.addLayer(
+    {
+      id: BUILDINGS_3D_LAYER,
+      type: 'fill-extrusion',
+      source: flat.source,
+      'source-layer': 'building',
+      minzoom: low,
+      paint: {
+        'fill-extrusion-color': BUILDING_COLORS[theme],
+        'fill-extrusion-height': [
+          'interpolate',
+          ['linear'],
+          ['zoom'],
+          low,
+          0,
+          high,
+          ['coalesce', ['get', 'render_height'], BUILDING_DEFAULT_M],
+        ],
+        'fill-extrusion-base': ['coalesce', ['get', 'render_min_height'], 0],
+        'fill-extrusion-opacity': 0.85,
+      },
+    },
+    CASING_LAYER,
+  );
 }
 
 function myPlacesData(list: MyPlace[]): FeatureCollection<Point> {
@@ -246,7 +331,7 @@ function myPlacesData(list: MyPlace[]): FeatureCollection<Point> {
 }
 
 /** Our own place labels: Sabah's list (once loaded) and the places the user added. */
-function addPlaceLayers(map: MapLibreMap, theme: Theme, places: PlacesIndex | null, mine: MyPlace[]) {
+function addPlaceLayers(map: MapLibreMap, theme: Theme, grab: boolean, places: PlacesIndex | null, mine: MyPlace[]) {
   const c = PLACE_COLORS[theme];
   const halo = labelHalo(theme);
   if (!map.getSource(MINE_SOURCE)) {
@@ -264,7 +349,7 @@ function addPlaceLayers(map: MapLibreMap, theme: Theme, places: PlacesIndex | nu
       minzoom: 12,
       layout: {
         'text-field': ['get', 'name'],
-        'text-font': ['Noto Sans Bold'],
+        'text-font': labelFont(map),
         'text-size': 12.5,
         'text-anchor': 'top',
         'text-offset': [0, 0.8],
@@ -273,7 +358,8 @@ function addPlaceLayers(map: MapLibreMap, theme: Theme, places: PlacesIndex | nu
       paint: { 'text-color': c.mine, 'text-halo-color': halo, 'text-halo-width': 1.6 },
     });
   }
-  if (!places || map.getSource(PLACES_SOURCE)) return;
+  // GrabMaps' map has its own place labels, and Amazon's rules keep its data apart from our OpenStreetMap list.
+  if (!places || grab || map.getSource(PLACES_SOURCE)) return;
   const color: ExpressionSpecification = [
     'match',
     ['get', 'group'],
@@ -317,15 +403,22 @@ function addPlaceLayers(map: MapLibreMap, theme: Theme, places: PlacesIndex | nu
  * "You are here". On the map: a dot with a beam showing which way the phone
  * points. While navigating: a big arrow puck that stays upright on screen.
  */
-function makeUserMarker(): HTMLElement {
+function makeUserMarker(car: CarLook): HTMLElement {
   const el = document.createElement('div');
   el.className = 'user-marker';
   el.setAttribute('role', 'img');
   el.setAttribute('aria-label', 'Your location');
   el.innerHTML =
     '<span class="user-beam"></span><span class="user-halo"></span><span class="user-dot"></span>' +
-    '<span class="user-puck"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5l7.6 18.4-7.6-4.3-7.6 4.3z"/></svg></span>';
+    '<span class="user-puck"><svg viewBox="0 0 24 24" aria-hidden="true"></svg></span>';
+  paintCar(el, car);
   return el;
+}
+
+function paintCar(marker: HTMLElement, car: CarLook) {
+  marker.style.setProperty('--car', car.color);
+  const svg = marker.querySelector('.user-puck svg');
+  if (svg) svg.innerHTML = carSvg(car.shape);
 }
 
 function makeReportMarker(report: HazardReport): HTMLElement {
@@ -397,12 +490,14 @@ export default function MapView(props: Props) {
   latest.current = props;
   const centredOnUser = useRef(false);
   const shownTheme = useRef(props.theme);
+  const shownData = useRef(props.mapData);
+  const shownDesign = useRef(props.mapDesign);
 
   // Create the map once.
   useEffect(() => {
     const map = new MapLibreMap({
       container: container.current!,
-      style: buildMapStyle(latest.current.theme),
+      style: styleFor(latest.current.theme, shownData.current.grab, shownDesign.current),
       center: DEFAULT_CENTER,
       zoom: 11,
       attributionControl: false,
@@ -414,12 +509,18 @@ export default function MapView(props: Props) {
     });
     map.on('style.load', () => {
       const p = latest.current;
-      addRouteLayers(map, shownTheme.current);
+      addRouteLayers(map, shownTheme.current, shownData.current);
       (map.getSource(SOURCE) as GeoJSONSource).setData(routeData(p.routes, p.selectedRoute, p.mode));
       addSignalLayer(map);
-      show3dBuildings(map, p.mode);
-      addPlaceLayers(map, shownTheme.current, p.places, p.myPlaces);
+      showBuildings3d(map, shownTheme.current, p.buildings3d && p.mode === 'nav');
+      addPlaceLayers(map, shownTheme.current, shownData.current.grab, p.places, p.myPlaces);
       showPlaceLabels(map, p.mode !== 'nav');
+    });
+    // GrabMaps' map didn't load (Amazon down, key wrong): go back to the free map.
+    map.on('error', (e) => {
+      if (!String((e.error as { url?: string }).url).includes(GRAB_STYLE_PATH)) return;
+      shownData.current = { ...shownData.current, grab: false };
+      map.setStyle(styleFor(shownTheme.current, false, shownDesign.current), { diff: false });
     });
     // Tap a place label to get directions there.
     const onPlaceTap = (e: MapLayerMouseEvent) => {
@@ -507,18 +608,37 @@ export default function MapView(props: Props) {
     };
   }, []);
 
-  // Swap the map style for light/dark.
+  // Swap the map style for light/dark, a new design, or once we know GrabMaps or traffic is set up.
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || shownTheme.current === props.theme) return;
+    const data = props.mapData;
+    const shown = shownData.current;
+    const same =
+      shownTheme.current === props.theme &&
+      shownDesign.current === props.mapDesign &&
+      shown.grab === data.grab &&
+      shown.traffic === data.traffic;
+    if (!map || same) return;
     shownTheme.current = props.theme;
-    map.setStyle(buildMapStyle(props.theme));
-  }, [props.theme]);
+    shownDesign.current = props.mapDesign;
+    shownData.current = data;
+    map.setStyle(styleFor(props.theme, data.grab, props.mapDesign), {
+      diff: !data.grab && !shown.grab && !data.traffic && !shown.traffic,
+    });
+  }, [props.theme, props.mapData, props.mapDesign]);
 
-  // 3D buildings on when driving starts, off after (style.load covers a style still loading).
+  // 3D buildings stand up only in the tilted driving view, if switched on in
+  // Customise (a new style adds them itself in style.load).
   useEffect(() => {
-    if (mapRef.current) show3dBuildings(mapRef.current, props.mode);
-  }, [props.mode]);
+    const map = mapRef.current;
+    if (map?.getLayer(CASING_LAYER)) showBuildings3d(map, shownTheme.current, props.buildings3d && props.mode === 'nav');
+  }, [props.buildings3d, props.mode]);
+
+  // The marker while driving.
+  useEffect(() => {
+    const marker = userMarker.current?.getElement();
+    if (marker) paintCar(marker, props.car);
+  }, [props.car]);
 
   // Route lines.
   useEffect(() => {
@@ -529,7 +649,9 @@ export default function MapView(props: Props) {
   // Sabah's place labels, once the list has loaded (the style may still be loading: then style.load adds them).
   useEffect(() => {
     const map = mapRef.current;
-    if (map?.getSource(SOURCE)) addPlaceLayers(map, shownTheme.current, props.places, latest.current.myPlaces);
+    if (map?.getSource(SOURCE)) {
+      addPlaceLayers(map, shownTheme.current, shownData.current.grab, props.places, latest.current.myPlaces);
+    }
   }, [props.places]);
 
   useEffect(() => {
@@ -585,7 +707,7 @@ export default function MapView(props: Props) {
     }
     if (!userMarker.current) {
       userMarker.current = new Marker({
-        element: makeUserMarker(),
+        element: makeUserMarker(latest.current.car),
         rotationAlignment: 'map',
         // Stays upright facing the viewer even when the map is tilted in 3D.
         pitchAlignment: 'viewport',

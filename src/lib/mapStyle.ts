@@ -1,13 +1,45 @@
 import type { MultiPolygon, Polygon } from 'geojson';
-import type { ExpressionSpecification, FilterSpecification, StyleSpecification } from 'maplibre-gl';
+import type { ExpressionSpecification, FilterSpecification, StyleSpecification, VectorSourceSpecification } from 'maplibre-gl';
 import type { Theme } from '../hooks/useTheme';
 import type { PlaceGroup } from './places';
 
 /*
- * OTW's own map style, drawn from OpenFreeMap's free OpenStreetMap tiles.
- * Colours match the design canvas: calm sage land, white roads and gold
- * highways by day; dark green-grey with clearly visible roads by night.
+ * OTW's own map style, drawn from OpenFreeMap's free OpenStreetMap tiles, or
+ * GrabMaps' tiles, which have the same layers. Colours match the design canvas:
+ * calm sage land, white roads and gold highways by day; dark green-grey with
+ * clearly visible roads by night.
  */
+
+/** How the GrabMaps map looks. Standard and Monochrome are Amazon's own styles, the rest are ours. */
+export type MapDesign = 'standard' | 'monochrome' | 'otw' | 'night' | 'bigtext';
+
+export const MAP_DESIGNS: readonly { value: MapDesign; label: string; hint: string }[] = [
+  { value: 'standard', label: 'Standard', hint: 'Colourful, with place icons' },
+  { value: 'monochrome', label: 'Monochrome', hint: 'Plain and quiet' },
+  { value: 'otw', label: 'OTW colours', hint: 'OTW’s own look' },
+  { value: 'night', label: 'Night drive', hint: 'Always dark, so the route stands out' },
+  { value: 'bigtext', label: 'Big text', hint: 'Larger road and place names' },
+];
+
+export const isMapDesign = (v: unknown) => MAP_DESIGNS.some((d) => d.value === v);
+
+const FREE_TILES: VectorSourceSpecification = {
+  type: 'vector',
+  url: 'https://tiles.openfreemap.org/planet',
+  attribution:
+    '<a href="https://openfreemap.org" target="_blank">OpenFreeMap</a> <a href="https://www.openmaptiles.org/" target="_blank">&copy; OpenMapTiles</a> Data from <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a>',
+};
+
+/** GrabMaps' tiles through our server, with the credit Amazon's own style carries. */
+export function grabTiles(): VectorSourceSpecification {
+  return {
+    type: 'vector',
+    tiles: [`${window.location.origin}/api/geo/map/v2/tiles/vector.basemap/{z}/{x}/{y}`],
+    maxzoom: 14,
+    attribution:
+      '&copy; <a href="https://docs.aws.amazon.com/location/latest/developerguide/data-attribution.html" target="_blank">AWS</a>, <a href="https://www.grab.com/sg/terms-policies/transport-delivery-logistics/" target="_blank">Grab</a>, &copy; OpenMapTiles, &copy; OpenStreetMap contributors',
+  };
+}
 
 interface Palette {
   land: string;
@@ -78,6 +110,36 @@ const PALETTES: Record<Theme, Palette> = {
     halo: '#1B2220',
   },
 };
+
+/**
+ * Very dark land with soft roads, for driving at night: the route line stays the
+ * brightest thing on screen. It looks the same in light and dark mode.
+ */
+const NIGHT_PALETTE: Palette = {
+  land: '#0B0F0E',
+  residential: '#0E1312',
+  park: '#10231A',
+  water: '#0B2430',
+  waterLabel: '#5E93AC',
+  building: '#161D1B',
+  casing: '#000000',
+  minor: '#46524D',
+  service: '#37423E',
+  street: '#66746F',
+  major: '#8F9D98',
+  majorCasing: '#000000',
+  motorway: '#D9B04F',
+  motorwayCasing: '#1E1608',
+  path: '#2C3633',
+  rail: '#2C3633',
+  roadText: '#F1F5F3',
+  placeText: '#F1F5F3',
+  poiText: '#8F9C97',
+  halo: '#000000',
+};
+
+/** How much larger Big text draws every name. */
+const BIG_TEXT = 1.45;
 
 /** Text colour of our own place labels (places.ts) by kind, so a surau or petrol station stands out. */
 export const PLACE_COLORS: Record<Theme, Record<PlaceGroup | 'mine', string>> = {
@@ -194,11 +256,22 @@ const ROADS: {
   },
 ];
 
-/** Layer id of the 3D buildings, hidden unless driving. */
-export const BUILDINGS_3D = 'building-3d';
-
-export function buildMapStyle(theme: Theme): StyleSpecification {
-  const p = PALETTES[theme];
+export function buildMapStyle(
+  theme: Theme,
+  tiles: VectorSourceSpecification = FREE_TILES,
+  design: MapDesign = 'otw',
+): StyleSpecification {
+  const p = design === 'night' ? NIGHT_PALETTE : PALETTES[theme];
+  const scale = design === 'bigtext' ? BIG_TEXT : 1;
+  const textByZoom = (zoomA: number, sizeA: number, zoomB: number, sizeB: number): ExpressionSpecification => [
+    'interpolate',
+    ['linear'],
+    ['zoom'],
+    zoomA,
+    sizeA * scale,
+    zoomB,
+    sizeB * scale,
+  ];
 
   const roadLayers = (suffix: string, filter: ExpressionSpecification, opacity = 1) =>
     [
@@ -228,14 +301,7 @@ export function buildMapStyle(theme: Theme): StyleSpecification {
     version: 8,
     name: `OTW ${theme}`,
     glyphs: 'https://tiles.openfreemap.org/fonts/{fontstack}/{range}.pbf',
-    sources: {
-      omt: {
-        type: 'vector',
-        url: 'https://tiles.openfreemap.org/planet',
-        attribution:
-          '<a href="https://openfreemap.org" target="_blank">OpenFreeMap</a> <a href="https://www.openmaptiles.org/" target="_blank">&copy; OpenMapTiles</a> Data from <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a>',
-      },
-    },
+    sources: { omt: tiles },
     layers: [
       { id: 'background', type: 'background', paint: { 'background-color': p.land } },
       {
@@ -302,36 +368,11 @@ export function buildMapStyle(theme: Theme): StyleSpecification {
       ...roadLayers('', notBridgeOrTunnel),
       ...roadLayers('-bridge', isBridge),
       {
-        // Raised buildings for the tilted driving view (switched on by MapView).
-        // Most buildings in Sabah have no height in OpenStreetMap, so they get a
-        // low 5 m; they rise as you zoom in so they don't pop up all at once.
-        id: BUILDINGS_3D,
-        type: 'fill-extrusion',
-        source: 'omt',
-        'source-layer': 'building',
-        minzoom: 15,
-        layout: { visibility: 'none' },
-        paint: {
-          'fill-extrusion-color': p.building,
-          'fill-extrusion-opacity': 0.85,
-          'fill-extrusion-height': [
-            'interpolate',
-            ['linear'],
-            ['zoom'],
-            15,
-            0,
-            16,
-            ['coalesce', ['get', 'render_height'], 5],
-          ],
-          'fill-extrusion-base': ['coalesce', ['get', 'render_min_height'], 0],
-        },
-      },
-      {
         id: 'water-label',
         type: 'symbol',
         source: 'omt',
         'source-layer': 'water_name',
-        layout: { 'text-field': NAME, 'text-font': ['Noto Sans Italic'], 'text-size': 12 },
+        layout: { 'text-field': NAME, 'text-font': ['Noto Sans Italic'], 'text-size': 12 * scale },
         paint: { 'text-color': p.waterLabel, 'text-halo-color': p.halo, 'text-halo-width': 1.2 },
       },
       {
@@ -345,7 +386,7 @@ export function buildMapStyle(theme: Theme): StyleSpecification {
           'symbol-placement': 'line',
           'text-field': NAME,
           'text-font': FONT_REGULAR,
-          'text-size': ['interpolate', ['linear'], ['zoom'], 13, 10, 17, 13],
+          'text-size': textByZoom(13, 10, 17, 13),
           'text-max-angle': 30,
           'symbol-spacing': 320,
         },
@@ -356,12 +397,13 @@ export function buildMapStyle(theme: Theme): StyleSpecification {
         type: 'symbol',
         source: 'omt',
         'source-layer': 'poi',
-        minzoom: 15,
+        // Night drive keeps shop names out of the way until you zoom right in.
+        minzoom: design === 'night' ? 18 : 15,
         filter: poiLabelFilter(),
         layout: {
           'text-field': NAME,
           'text-font': FONT_REGULAR,
-          'text-size': 11,
+          'text-size': 11 * scale,
           'text-max-width': 8,
           'text-padding': 4,
         },
@@ -377,7 +419,7 @@ export function buildMapStyle(theme: Theme): StyleSpecification {
         layout: {
           'text-field': NAME,
           'text-font': FONT_BOLD,
-          'text-size': ['interpolate', ['linear'], ['zoom'], 11, 10, 15, 13],
+          'text-size': textByZoom(11, 10, 15, 13),
           'text-transform': 'uppercase',
           'text-letter-spacing': 0.06,
           'text-max-width': 8,
@@ -394,7 +436,7 @@ export function buildMapStyle(theme: Theme): StyleSpecification {
         layout: {
           'text-field': NAME,
           'text-font': FONT_BOLD,
-          'text-size': ['interpolate', ['linear'], ['zoom'], 8, 11, 14, 16],
+          'text-size': textByZoom(8, 11, 14, 16),
           'text-max-width': 8,
         },
         paint: { 'text-color': p.placeText, 'text-halo-color': p.halo, 'text-halo-width': 1.6 },
@@ -409,7 +451,7 @@ export function buildMapStyle(theme: Theme): StyleSpecification {
         layout: {
           'text-field': NAME,
           'text-font': FONT_BOLD,
-          'text-size': ['interpolate', ['linear'], ['zoom'], 4, 11, 12, 20],
+          'text-size': textByZoom(4, 11, 12, 20),
           'text-max-width': 8,
         },
         paint: { 'text-color': p.placeText, 'text-halo-color': p.halo, 'text-halo-width': 2 },

@@ -9,6 +9,7 @@ import RouteSheet from './components/RouteSheet';
 import NavigationView from './components/NavigationView';
 import LocationScreen from './components/LocationScreen';
 import AccountScreen from './components/AccountScreen';
+import CustomiseScreen from './components/CustomiseScreen';
 import FamilyScreen from './components/FamilyScreen';
 import PrivacyScreen from './components/PrivacyScreen';
 import ReportInfoSheet from './components/ReportInfoSheet';
@@ -33,6 +34,9 @@ import {
 } from './lib/geo';
 import { aheadPhrase, hazardPhrase, instruction, nextAction, PHRASES, worthSaying, type Lang } from './lib/instructions';
 import { rushHourFactor } from './lib/eta';
+import { DEFAULT_CAR, isCarLook, type CarLook } from './lib/car';
+import { keepPlace } from './lib/grab';
+import { isMapDesign, type MapDesign } from './lib/mapStyle';
 import {
   HAZARDS,
   initials,
@@ -52,6 +56,7 @@ import { useGeolocation } from './hooks/useGeolocation';
 import { useArea, useFamily, useFamilySharing } from './hooks/useFamily';
 import { useTheme } from './hooks/useTheme';
 import { useRecents } from './hooks/useRecents';
+import { useGeoStatus } from './hooks/useGeoStatus';
 import { useStored } from './hooks/useStored';
 import { usePresence } from './hooks/usePresence';
 import { useNavProgress, useSimulatedDrive } from './hooks/useNavigation';
@@ -65,6 +70,7 @@ type Screen =
   | 'family'
   | 'account'
   | 'privacy'
+  | 'customise'
   | 'report'
   | 'save'
   | 'steps'
@@ -74,7 +80,7 @@ type Screen =
 /** Screens that open as a sheet over whatever is underneath. */
 const MODALS: Screen[] = ['report', 'save', 'steps', 'feedback', 'reportinfo'];
 /** Full-screen pages opened from home; home stays mounted underneath them. */
-const HOME_OVERLAYS: Screen[] = ['search', 'account', 'privacy', 'family', 'report', 'save', 'feedback'];
+const HOME_OVERLAYS: Screen[] = ['search', 'account', 'privacy', 'customise', 'family', 'report', 'save', 'feedback'];
 
 /**
  * Add ?sim to the address to fake the drive, e.g. testing on a laptop. It also
@@ -105,9 +111,13 @@ const NO_INSETS = { top: 0, bottom: 0 };
 const isArray = (v: unknown) => Array.isArray(v);
 
 export default function App() {
-  const { theme, toggle: toggleTheme } = useTheme();
   const geo = useGeolocation();
+  const { theme, toggle: toggleTheme, auto: autoTheme, setAuto: setAutoTheme } = useTheme(geo.fix?.coord ?? null);
   const { recents, add: addRecent } = useRecents();
+  const mapData = useGeoStatus();
+  const [mapDesign, setMapDesign] = useStored<MapDesign>('otw-map-design', 'standard', isMapDesign);
+  const [buildings3d, setBuildings3d] = useStored('otw-3d', true, (v) => typeof v === 'boolean');
+  const [car, setCar] = useStored<CarLook>('otw-car', DEFAULT_CAR, isCarLook);
   const [profile, setProfile] = useStored<Profile | null>('otw-profile', null, (v) => v == null || typeof v === 'object');
   const [saved, setSaved] = useStored<SavedPlace[]>('otw-saved', [], isArray);
   const [reports, setReports] = useStored<HazardReport[]>('otw-reports', [], isArray);
@@ -260,7 +270,12 @@ export default function App() {
 
   const openRoute = (place: Place, remember = true) => {
     if (!origin) return;
-    if (remember) addRecent(place);
+    // A place that can't be kept is still driven to, just not listed in recents.
+    if (remember) {
+      keepPlace(place)
+        .then((kept) => kept && addRecent(kept))
+        .catch(() => {});
+    }
     setDestination(place);
     setStop(null);
     fetchRoutes(origin, place, null);
@@ -325,7 +340,7 @@ export default function App() {
     spoken.current.clear();
     pace.current = null;
     tripFinished.current = false;
-    tripRush.current = rushHourFactor(new Date());
+    tripRush.current = route.traffic ? 1 : rushHourFactor(new Date());
     setActiveRoute(route);
     go('nav');
     if (!muted) {
@@ -340,9 +355,13 @@ export default function App() {
   };
 
   // --- Saved places ---
-  const savePlace = (label: string, kind: SavedKind) => {
+  const savePlace = async (label: string, kind: SavedKind) => {
     if (!placeToSave) return;
-    const place = placeToSave;
+    const place = await keepPlace(placeToSave).catch(() => null);
+    if (!place) {
+      showToast('Couldn’t save this place. Check your internet and try again.');
+      return;
+    }
     setSaved((list) => [
       ...list.filter((s) => s.label !== label && s.place.id !== place.id),
       { label, kind, place },
@@ -735,6 +754,7 @@ export default function App() {
   const searchView = usePresence(phase === 'app' && (base === 'search' || top === 'search'));
   const accountView = usePresence(phase === 'app' && base === 'account');
   const privacyView = usePresence(phase === 'app' && base === 'privacy');
+  const customiseView = usePresence(phase === 'app' && base === 'customise');
   const familyView = usePresence(phase === 'app' && base === 'family');
   const reportView = usePresence(phase === 'app' && top === 'report', 250);
   const reportInfoView = usePresence(phase === 'app' && top === 'reportinfo' && tappedReport != null, 250);
@@ -767,7 +787,11 @@ export default function App() {
   return (
     <div className="app" data-screen={base}>
       <MapView
-        theme={theme}
+        theme={mapData.grab && mapDesign === 'night' ? 'dark' : theme}
+        mapData={mapData}
+        mapDesign={mapDesign}
+        buildings3d={buildings3d}
+        car={car}
         mode={mapMode}
         position={base === 'nav' ? shownNavPos : realPos}
         heading={base === 'nav' ? navHeading : compass}
@@ -844,7 +868,7 @@ export default function App() {
               routes={routes}
               error={routeError}
               selected={selected}
-              rush={rushHourFactor(new Date())}
+              rush={routes?.[0]?.traffic ? 1 : rushHourFactor(new Date())}
               shareLive={canShare ? shareLive : null}
               onToggleShareLive={() => setShareLive((on) => !on)}
               onSelect={setSelected}
@@ -896,7 +920,7 @@ export default function App() {
 
           {searchView.mounted && (
             <SearchScreen
-              position={realPos}
+              position={origin}
               recents={recents}
               saved={saved}
               myPlaces={myPlaces}
@@ -912,14 +936,13 @@ export default function App() {
           {accountView.mounted && (
             <AccountScreen
               profile={profile}
-              theme={theme}
               leaving={accountView.leaving ? leaveStyle : null}
               onSaveName={(name) => {
                 setProfile({ ...profile, name });
                 if (family.inFamily) void family.update({ name }).catch(() => {});
                 showToast(`Saved! Family sees you as ${name}`);
               }}
-              onToggleTheme={toggleTheme}
+              onCustomise={() => go('customise')}
               lang={lang}
               onLang={setLang}
               onTestVoice={(l) => speak(PHRASES.test[l], l, { repeat: true })}
@@ -938,6 +961,23 @@ export default function App() {
 
           {privacyView.mounted && (
             <PrivacyScreen leaving={privacyView.leaving ? leaveStyle : null} onBack={back} />
+          )}
+
+          {customiseView.mounted && (
+            <CustomiseScreen
+              theme={theme}
+              autoTheme={autoTheme}
+              mapDesign={mapData.grab ? mapDesign : null}
+              buildings3d={buildings3d}
+              car={car}
+              leaving={customiseView.leaving ? leaveStyle : null}
+              onToggleTheme={toggleTheme}
+              onAutoTheme={setAutoTheme}
+              onMapDesign={setMapDesign}
+              onBuildings3d={setBuildings3d}
+              onCar={setCar}
+              onBack={back}
+            />
           )}
 
           {familyView.mounted && (
