@@ -29,6 +29,7 @@ import {
 } from './lib/geo';
 import { aheadPhrase, hazardPhrase, instruction, PHRASES, type Lang } from './lib/instructions';
 import { rushHourFactor } from './lib/eta';
+import { keepPlace } from './lib/grab';
 import {
   HAZARDS,
   REPORT_LIFETIME_MS,
@@ -43,6 +44,7 @@ import { speak, stopSpeaking } from './lib/voice';
 import { useGeolocation } from './hooks/useGeolocation';
 import { useTheme } from './hooks/useTheme';
 import { useRecents } from './hooks/useRecents';
+import { useGeoStatus } from './hooks/useGeoStatus';
 import { useStored } from './hooks/useStored';
 import { usePresence } from './hooks/usePresence';
 import { useNavProgress, useSimulatedDrive } from './hooks/useNavigation';
@@ -95,6 +97,7 @@ export default function App() {
   const { theme, toggle: toggleTheme } = useTheme();
   const geo = useGeolocation();
   const { recents, add: addRecent } = useRecents();
+  const mapData = useGeoStatus();
   const [profile, setProfile] = useStored<Profile | null>('otw-profile', null, (v) => v == null || typeof v === 'object');
   const [saved, setSaved] = useStored<SavedPlace[]>('otw-saved', [], isArray);
   const [reports, setReports] = useStored<HazardReport[]>('otw-reports', [], isArray);
@@ -228,7 +231,12 @@ export default function App() {
 
   const openRoute = (place: Place, remember = true) => {
     if (!origin) return;
-    if (remember) addRecent(place);
+    // A place that can't be kept is still driven to, just not listed in recents.
+    if (remember) {
+      keepPlace(place)
+        .then((kept) => kept && addRecent(kept))
+        .catch(() => {});
+    }
     setDestination(place);
     setStop(null);
     fetchRoutes(origin, place, null);
@@ -289,7 +297,7 @@ export default function App() {
     const route = routes[selected];
     spoken.current.clear();
     pace.current = null;
-    tripRush.current = rushHourFactor(new Date());
+    tripRush.current = route.traffic ? 1 : rushHourFactor(new Date());
     setActiveRoute(route);
     go('nav');
     if (!muted) {
@@ -304,9 +312,13 @@ export default function App() {
   };
 
   // --- Saved places ---
-  const savePlace = (label: string, kind: SavedKind) => {
+  const savePlace = async (label: string, kind: SavedKind) => {
     if (!placeToSave) return;
-    const place = placeToSave;
+    const place = await keepPlace(placeToSave).catch(() => null);
+    if (!place) {
+      showToast('Couldn’t save this place. Check your internet and try again.');
+      return;
+    }
     setSaved((list) => [
       ...list.filter((s) => s.label !== label && s.place.id !== place.id),
       { label, kind, place },
@@ -570,6 +582,7 @@ export default function App() {
     <div className="app" data-screen={base}>
       <MapView
         theme={theme}
+        mapData={mapData}
         mode={mapMode}
         position={base === 'nav' ? shownNavPos : realPos}
         heading={base === 'nav' ? navHeading : compass}
@@ -637,7 +650,7 @@ export default function App() {
               routes={routes}
               error={routeError}
               selected={selected}
-              rush={rushHourFactor(new Date())}
+              rush={routes?.[0]?.traffic ? 1 : rushHourFactor(new Date())}
               onSelect={setSelected}
               onShowSteps={() => go('steps')}
               onStart={startTrip}
@@ -684,7 +697,7 @@ export default function App() {
 
           {searchView.mounted && (
             <SearchScreen
-              position={realPos}
+              position={origin}
               recents={recents}
               saved={saved}
               myPlaces={myPlaces}

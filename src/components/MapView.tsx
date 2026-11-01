@@ -17,6 +17,7 @@ import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?url';
 setWorkerUrl(workerUrl);
 import type { Place, Route } from '../lib/api';
 import type { LngLat } from '../lib/geo';
+import type { GeoStatus } from '../lib/grab';
 import { buildMapStyle, labelHalo, PLACE_COLORS, POI_LABEL_LAYER, poiLabelFilter } from '../lib/mapStyle';
 import { HAZARDS, myPlaceToPlace, type HazardReport, type MyPlace } from '../lib/models';
 import { mapFeatures, toPlace, type PlacesIndex } from '../lib/places';
@@ -34,6 +35,25 @@ const SOURCE = 'otw-routes';
 const CASING_LAYER = 'otw-route-casing';
 const LINE_LAYER = 'otw-route-line';
 
+const TRAFFIC_SOURCE = 'otw-traffic';
+const TRAFFIC_LAYER = 'otw-traffic-flow';
+const GRAB_STYLE_PATH = '/api/geo/map/style';
+
+/** GrabMaps' own style through our server, or OTW's style on the free map. */
+function styleFor(theme: Theme, grab: boolean) {
+  if (!grab) return buildMapStyle(theme);
+  return `${window.location.origin}${GRAB_STYLE_PATH}?scheme=${theme === 'dark' ? 'Dark' : 'Light'}`;
+}
+
+/** The font the style's own labels use: another style's font wouldn't draw. */
+function labelFont(map: MapLibreMap): string[] {
+  for (const layer of map.getStyle().layers ?? []) {
+    const font = layer.type === 'symbol' ? layer.layout?.['text-font'] : undefined;
+    if (Array.isArray(font)) return (font[0] === 'literal' ? font[1] : font) as string[];
+  }
+  return ['Noto Sans Bold'];
+}
+
 const PLACES_SOURCE = 'otw-places';
 const MINE_SOURCE = 'otw-my-places';
 /** Surau, petrol, parking and food: shown a little further out than the rest. */
@@ -49,6 +69,8 @@ export type MapMode = 'browse' | 'preview' | 'nav' | 'pick';
 
 interface Props {
   theme: Theme;
+  /** Which paid map data the server is set up for. */
+  mapData: GeoStatus;
   mode: MapMode;
   position: LngLat | null;
   heading: number | null;
@@ -99,18 +121,31 @@ function routeData(routes: Route[] | null, selected: number, mode: MapMode): Fea
   };
 }
 
-function addRouteLayers(map: MapLibreMap, theme: Theme) {
+function addRouteLayers(map: MapLibreMap, theme: Theme, data: GeoStatus) {
   if (map.getSource(SOURCE)) return;
   const c = ROUTE_COLORS[theme];
   // Draw above every road (bridges included) but under the place and street names.
   const layers = map.getStyle().layers ?? [];
   const lastRoad = layers.reduce((last, l, i) => (l.type === 'line' ? i : last), -1);
   const firstLabel = layers.slice(lastRoad + 1).find((l) => l.type === 'symbol')?.id;
+  if (data.traffic) {
+    map.addSource(TRAFFIC_SOURCE, {
+      type: 'raster',
+      tiles: [`${window.location.origin}/api/geo/traffic/{z}/{x}/{y}`],
+      tileSize: 512,
+      minzoom: 7,
+      maxzoom: 18,
+      attribution: 'Traffic © <a href="https://www.tomtom.com" target="_blank">TomTom</a>',
+    });
+    map.addLayer({ id: TRAFFIC_LAYER, type: 'raster', source: TRAFFIC_SOURCE, paint: { 'raster-opacity': 0.9 } }, firstLabel);
+  }
   map.addSource(SOURCE, {
     type: 'geojson',
     data: routeData(null, 0, 'browse'),
     // The FOSSGIS route server asks for this credit, a "fix the map" link and a contact email.
+    // Amazon asks for a link to its page on where the map data comes from.
     attribution:
+      `${data.grab ? 'Map data <a href="https://docs.aws.amazon.com/location/latest/developerguide/data-attribution.html" target="_blank">GrabMaps, Amazon Location</a> · ' : ''}` +
       'Routes <a href="https://valhalla1.openstreetmap.de" target="_blank">FOSSGIS Valhalla</a>, <a href="https://project-osrm.org" target="_blank">OSRM</a> · <a href="https://www.openstreetmap.org/fixthemap" target="_blank">Fix the map</a> · Contact <a href="mailto:otwapp.malaysia@gmail.com">otwapp.malaysia@gmail.com</a>',
   });
   map.addLayer(
@@ -153,7 +188,7 @@ function myPlacesData(list: MyPlace[]): FeatureCollection<Point> {
 }
 
 /** Our own place labels: Sabah's list (once loaded) and the places the user added. */
-function addPlaceLayers(map: MapLibreMap, theme: Theme, places: PlacesIndex | null, mine: MyPlace[]) {
+function addPlaceLayers(map: MapLibreMap, theme: Theme, grab: boolean, places: PlacesIndex | null, mine: MyPlace[]) {
   const c = PLACE_COLORS[theme];
   const halo = labelHalo(theme);
   if (!map.getSource(MINE_SOURCE)) {
@@ -171,7 +206,7 @@ function addPlaceLayers(map: MapLibreMap, theme: Theme, places: PlacesIndex | nu
       minzoom: 12,
       layout: {
         'text-field': ['get', 'name'],
-        'text-font': ['Noto Sans Bold'],
+        'text-font': labelFont(map),
         'text-size': 12.5,
         'text-anchor': 'top',
         'text-offset': [0, 0.8],
@@ -180,7 +215,8 @@ function addPlaceLayers(map: MapLibreMap, theme: Theme, places: PlacesIndex | nu
       paint: { 'text-color': c.mine, 'text-halo-color': halo, 'text-halo-width': 1.6 },
     });
   }
-  if (!places || map.getSource(PLACES_SOURCE)) return;
+  // GrabMaps' map has its own place labels, and Amazon's rules keep its data apart from our OpenStreetMap list.
+  if (!places || grab || map.getSource(PLACES_SOURCE)) return;
   const color: ExpressionSpecification = [
     'match',
     ['get', 'group'],
@@ -273,12 +309,13 @@ export default function MapView(props: Props) {
   latest.current = props;
   const centredOnUser = useRef(false);
   const shownTheme = useRef(props.theme);
+  const shownData = useRef(props.mapData);
 
   // Create the map once.
   useEffect(() => {
     const map = new MapLibreMap({
       container: container.current!,
-      style: buildMapStyle(latest.current.theme),
+      style: styleFor(latest.current.theme, shownData.current.grab),
       center: DEFAULT_CENTER,
       zoom: 11,
       attributionControl: false,
@@ -290,10 +327,16 @@ export default function MapView(props: Props) {
     });
     map.on('style.load', () => {
       const p = latest.current;
-      addRouteLayers(map, shownTheme.current);
+      addRouteLayers(map, shownTheme.current, shownData.current);
       (map.getSource(SOURCE) as GeoJSONSource).setData(routeData(p.routes, p.selectedRoute, p.mode));
-      addPlaceLayers(map, shownTheme.current, p.places, p.myPlaces);
+      addPlaceLayers(map, shownTheme.current, shownData.current.grab, p.places, p.myPlaces);
       showPlaceLabels(map, p.mode !== 'nav');
+    });
+    // GrabMaps' map didn't load (Amazon down, key wrong): go back to the free map.
+    map.on('error', (e) => {
+      if (!String((e.error as { url?: string }).url).includes(GRAB_STYLE_PATH)) return;
+      shownData.current = { ...shownData.current, grab: false };
+      map.setStyle(styleFor(shownTheme.current, false), { diff: false });
     });
     // Tap a place label to get directions there.
     const onPlaceTap = (e: MapLayerMouseEvent) => {
@@ -380,13 +423,16 @@ export default function MapView(props: Props) {
     };
   }, []);
 
-  // Swap the map style for light/dark.
+  // Swap the map style for light/dark, or once we know GrabMaps or traffic is set up.
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || shownTheme.current === props.theme) return;
+    const data = props.mapData;
+    const shown = shownData.current;
+    if (!map || (shownTheme.current === props.theme && shown.grab === data.grab && shown.traffic === data.traffic)) return;
     shownTheme.current = props.theme;
-    map.setStyle(buildMapStyle(props.theme));
-  }, [props.theme]);
+    shownData.current = data;
+    map.setStyle(styleFor(props.theme, data.grab), { diff: !data.grab && !shown.grab && !data.traffic && !shown.traffic });
+  }, [props.theme, props.mapData]);
 
   // Route lines.
   useEffect(() => {
@@ -397,7 +443,9 @@ export default function MapView(props: Props) {
   // Sabah's place labels, once the list has loaded (the style may still be loading: then style.load adds them).
   useEffect(() => {
     const map = mapRef.current;
-    if (map?.getSource(SOURCE)) addPlaceLayers(map, shownTheme.current, props.places, latest.current.myPlaces);
+    if (map?.getSource(SOURCE)) {
+      addPlaceLayers(map, shownTheme.current, shownData.current.grab, props.places, latest.current.myPlaces);
+    }
   }, [props.places]);
 
   useEffect(() => {

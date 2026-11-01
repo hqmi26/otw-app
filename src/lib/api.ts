@@ -1,14 +1,14 @@
 import type { LngLat } from './geo';
+import { geoStatus, grabRoutes } from './grab';
 import type { PlaceGroup } from './places';
 
 /*
- * Free public services, no API keys:
+ * GrabMaps (grab.ts) comes first once our server has its key. These free public
+ * services, no API keys, are what's used without it, and when it's down:
  *  - Photon (komoot) for place search outside Sabah (Sabah is searched on the phone, see places.ts)
  *  - Valhalla (FOSSGIS) for driving routes: it offers 2–3 different routes, where
  *    the OSRM demo server finds only one in KK. OSRM stays as the backup.
- * All are fine for family testing (Valhalla allows one request a second). For a
- * public launch, self-host them on a server in Malaysia (see README) so nobody's
- * location leaves the country.
+ * All are fine for family testing (Valhalla allows one request a second).
  */
 const PHOTON_URL = 'https://photon.komoot.io/api/';
 const VALHALLA_URL = 'https://valhalla1.openstreetmap.de/route';
@@ -20,6 +20,8 @@ export interface Place {
   name: string;
   subtitle: string;
   coord: LngLat;
+  /** A GrabMaps result that may be kept on the phone (see keepPlace in grab.ts). */
+  stored?: boolean;
 }
 
 interface PhotonFeature {
@@ -38,11 +40,24 @@ interface PhotonFeature {
 }
 
 /** Quick category searches for the chips on the search screen. */
-export const CATEGORIES: readonly { label: string; query: string; osmTag: string; group: PlaceGroup }[] = [
-  { label: 'Petrol', query: 'petrol', osmTag: 'amenity:fuel', group: 'fuel' },
-  { label: 'Food', query: 'restoran', osmTag: 'amenity:restaurant', group: 'food' },
-  { label: 'Surau', query: 'surau', osmTag: 'amenity:place_of_worship', group: 'surau' },
-  { label: 'Parking', query: 'parking', osmTag: 'amenity:parking', group: 'parking' },
+export const CATEGORIES: readonly {
+  label: string;
+  query: string;
+  osmTag: string;
+  group: PlaceGroup;
+  /** Amazon's category ids for GrabMaps. */
+  grab: readonly string[];
+}[] = [
+  { label: 'Petrol', query: 'petrol', osmTag: 'amenity:fuel', group: 'fuel', grab: ['petrol-gasoline_station', 'fueling_station'] },
+  {
+    label: 'Food',
+    query: 'restoran',
+    osmTag: 'amenity:restaurant',
+    group: 'food',
+    grab: ['restaurant', 'fast_food', 'casual_dining', 'coffee_shop', 'cafeteria'],
+  },
+  { label: 'Surau', query: 'surau', osmTag: 'amenity:place_of_worship', group: 'surau', grab: ['mosque'] },
+  { label: 'Parking', query: 'parking', osmTag: 'amenity:parking', group: 'parking', grab: ['parking', 'parking_garage-parking_house'] },
 ];
 
 export async function searchPlaces(
@@ -115,6 +130,8 @@ export interface Route {
   /** Main roads on the route, e.g. "Jalan Ampang, MRR2". */
   via: string;
   steps: RouteStep[];
+  /** The times already include traffic, so no rush-hour allowance is added. */
+  traffic?: boolean;
 }
 
 interface OsrmStep {
@@ -179,6 +196,13 @@ export async function getRoutes(
   choices = true,
 ): Promise<Route[]> {
   const points = stop ? [from, stop.coord, to] : [from, to];
+  if ((await geoStatus()).grab) {
+    try {
+      return await grabRoutes(points, choices && !stop, stop ?? null, signal);
+    } catch (e) {
+      if ((e as Error).name === 'AbortError') throw e; // otherwise the free services below take over
+    }
+  }
   let data: OsrmAnswer;
   try {
     data = await valhalla(points, choices && !stop, signal);

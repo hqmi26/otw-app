@@ -133,7 +133,9 @@ export default function RouteSheet(p: Props) {
 
         {p.routes && (
           <div className="route-extras">
-            <span className="row-sub wrap">{p.rush > 1 ? 'Includes usual rush-hour traffic' : ' '}</span>
+            <span className="row-sub wrap">
+              {p.routes[0]?.traffic ? 'Includes traffic' : p.rush > 1 ? 'Includes usual rush-hour traffic' : ' '}
+            </span>
             <button type="button" className="text-btn" onClick={p.onShowSteps}>
               All turns ›
             </button>
