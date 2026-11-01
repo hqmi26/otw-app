@@ -21,13 +21,16 @@ import type { LngLat } from '../lib/geo';
 import type { GeoStatus } from '../lib/grab';
 import {
   buildMapStyle,
+  designTextScale,
   grabTiles,
   labelHalo,
   PLACE_COLORS,
   POI_LABEL_LAYER,
   poiLabelFilter,
+  poiTextColor,
   type MapDesign,
 } from '../lib/mapStyle';
+import { addPoiImages, POI_FILTER, POI_ICON } from '../lib/poiIcons';
 import { HAZARDS, myPlaceToPlace, type HazardReport, type MyPlace } from '../lib/models';
 import { mapFeatures, toPlace, type PlacesIndex } from '../lib/places';
 import type { Theme } from '../hooks/useTheme';
@@ -43,6 +46,11 @@ export const DEFAULT_CENTER: LngLat = [116.0762, 5.9836];
 const SOURCE = 'otw-routes';
 const CASING_LAYER = 'otw-route-casing';
 const LINE_LAYER = 'otw-route-line';
+
+const POI_ICON_LAYER = 'otw-poi-icons';
+/** Icons appear at this zoom, and on Night drive their names wait until the next one. */
+const POI_MIN_ZOOM = 14.5;
+const NIGHT_POI_NAME_ZOOM = 17;
 
 const BUILDINGS_3D_LAYER = 'otw-buildings-3d';
 const BUILDING_COLORS: Record<Theme, string> = { light: '#DDE1D8', dark: '#2A3431' };
@@ -319,6 +327,46 @@ function showBuildings3d(map: MapLibreMap, theme: Theme, on: boolean) {
   );
 }
 
+/** OTW's place icons, for the GrabMaps designs that don't have their own. Standard does. */
+function addPoiIcons(map: MapLibreMap, theme: Theme, design: MapDesign) {
+  if (design === 'standard') return;
+  const roads = map.getStyle().layers?.find((l) => 'source-layer' in l && l['source-layer'] === 'transportation');
+  if (!roads || !('source' in roads)) return;
+  addPoiImages(map);
+  // Their text-only place names would sit on top of the icons.
+  if (map.getLayer(POI_LABEL_LAYER)) map.setLayoutProperty(POI_LABEL_LAYER, 'visibility', 'none');
+  const scale = designTextScale(design);
+  const name: ExpressionSpecification = ['coalesce', ['get', 'name:latin'], ['get', 'name']];
+  map.addLayer(
+    {
+      id: POI_ICON_LAYER,
+      type: 'symbol',
+      source: roads.source,
+      'source-layer': 'poi',
+      minzoom: POI_MIN_ZOOM,
+      filter: POI_FILTER,
+      layout: {
+        'icon-image': POI_ICON,
+        'icon-size': scale > 1 ? 1.2 : 1,
+        'text-field': design === 'night' ? ['step', ['zoom'], '', NIGHT_POI_NAME_ZOOM, name] : name,
+        'text-font': [design === 'monochrome' ? 'Amazon Ember Regular,Noto Sans Regular' : 'Noto Sans Regular'],
+        'text-size': 11 * scale,
+        'text-anchor': 'top',
+        'text-offset': [0, 1.1],
+        'text-max-width': 8,
+        'text-optional': true,
+        'symbol-sort-key': ['get', 'rank'],
+      },
+      paint: {
+        'text-color': poiTextColor(theme, design),
+        'text-halo-color': labelHalo(theme),
+        'text-halo-width': 1.4,
+      },
+    },
+    MINE_DOT_LAYER,
+  );
+}
+
 function myPlacesData(list: MyPlace[]): FeatureCollection<Point> {
   return {
     type: 'FeatureCollection',
@@ -515,6 +563,7 @@ export default function MapView(props: Props) {
       if (!shownData.current.grab) addSignalLayer(map);
       showBuildings3d(map, shownTheme.current, p.buildings3d && p.mode === 'nav');
       addPlaceLayers(map, shownTheme.current, shownData.current.grab, p.places, p.myPlaces);
+      if (shownData.current.grab) addPoiIcons(map, shownTheme.current, shownDesign.current);
       showPlaceLabels(map, p.mode !== 'nav');
     });
     // GrabMaps' map didn't load (Amazon down, key wrong): go back to the free map.
