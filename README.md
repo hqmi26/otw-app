@@ -103,6 +103,19 @@ Service** for the map, place search, naming a dropped pin and routes
 fails, everything below keeps working as before. The server keeps the key, so it never
 reaches the phone.
 
+**Customise** (Account → Customise, `src/components/CustomiseScreen.tsx`) groups the looks
+in one place: dark mode, map style, 3D buildings and your car. 3D is drawn by us from the
+heights in the tiles, because Amazon's own Buildings3D option refuses GrabMaps. It shows
+when the map tilts, as it does while driving, and only where the data has buildings.
+
+**Map style** picks how the GrabMaps map looks: Amazon's Standard or
+Monochrome, or our own styles from `src/lib/mapStyle.ts` on GrabMaps' tiles: OTW colours,
+Night drive (always dark) and Big text. Each phone remembers its own choice. On the free
+map there's only OTW's style, so the choice is hidden. Satellite isn't available for GrabMaps.
+
+**Auto day and night** turns dark mode on at sunset and off at sunrise,
+worked out from where the phone is (`sunIsDown` in `src/lib/geo.ts`), so it needs no service.
+
 The Petrol/Food/Surau/Parking chips ask GrabMaps too, but the Amazon console doesn't offer
 SearchNearby for a key, so for now Amazon refuses and the chips use our own Sabah list.
 

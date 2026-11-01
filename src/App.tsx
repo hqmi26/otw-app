@@ -8,6 +8,7 @@ import RouteSheet from './components/RouteSheet';
 import NavigationView from './components/NavigationView';
 import LocationScreen from './components/LocationScreen';
 import AccountScreen from './components/AccountScreen';
+import CustomiseScreen from './components/CustomiseScreen';
 import FamilyScreen from './components/FamilyScreen';
 import ReportSheet from './components/ReportSheet';
 import SavePlaceSheet from './components/SavePlaceSheet';
@@ -29,7 +30,9 @@ import {
 } from './lib/geo';
 import { aheadPhrase, hazardPhrase, instruction, PHRASES, type Lang } from './lib/instructions';
 import { rushHourFactor } from './lib/eta';
+import { DEFAULT_CAR, isCarLook, type CarLook } from './lib/car';
 import { keepPlace } from './lib/grab';
+import { isMapDesign, type MapDesign } from './lib/mapStyle';
 import {
   HAZARDS,
   REPORT_LIFETIME_MS,
@@ -57,6 +60,7 @@ type Screen =
   | 'nav'
   | 'family'
   | 'account'
+  | 'customise'
   | 'report'
   | 'save'
   | 'steps'
@@ -65,7 +69,7 @@ type Screen =
 /** Screens that open as a sheet over whatever is underneath. */
 const MODALS: Screen[] = ['report', 'save', 'steps', 'feedback'];
 /** Full-screen pages opened from home; home stays mounted underneath them. */
-const HOME_OVERLAYS: Screen[] = ['search', 'account', 'family', 'report', 'save', 'feedback'];
+const HOME_OVERLAYS: Screen[] = ['search', 'account', 'customise', 'family', 'report', 'save', 'feedback'];
 
 /**
  * Add ?sim to the address to fake the drive, e.g. testing on a laptop. It also
@@ -94,10 +98,13 @@ const NO_INSETS = { top: 0, bottom: 0 };
 const isArray = (v: unknown) => Array.isArray(v);
 
 export default function App() {
-  const { theme, toggle: toggleTheme } = useTheme();
   const geo = useGeolocation();
+  const { theme, toggle: toggleTheme, auto: autoTheme, setAuto: setAutoTheme } = useTheme(geo.fix?.coord ?? null);
   const { recents, add: addRecent } = useRecents();
   const mapData = useGeoStatus();
+  const [mapDesign, setMapDesign] = useStored<MapDesign>('otw-map-design', 'standard', isMapDesign);
+  const [buildings3d, setBuildings3d] = useStored('otw-3d', false, (v) => typeof v === 'boolean');
+  const [car, setCar] = useStored<CarLook>('otw-car', DEFAULT_CAR, isCarLook);
   const [profile, setProfile] = useStored<Profile | null>('otw-profile', null, (v) => v == null || typeof v === 'object');
   const [saved, setSaved] = useStored<SavedPlace[]>('otw-saved', [], isArray);
   const [reports, setReports] = useStored<HazardReport[]>('otw-reports', [], isArray);
@@ -565,6 +572,7 @@ export default function App() {
   const leaveStyle = lastMove.current === 'pop' ? 'pop' : 'fade';
   const searchView = usePresence(phase === 'app' && base === 'search');
   const accountView = usePresence(phase === 'app' && base === 'account');
+  const customiseView = usePresence(phase === 'app' && base === 'customise');
   const familyView = usePresence(phase === 'app' && base === 'family');
   const reportView = usePresence(phase === 'app' && top === 'report', 250);
   const saveView = usePresence(phase === 'app' && top === 'save' && placeToSave != null, 250);
@@ -581,8 +589,11 @@ export default function App() {
   return (
     <div className="app" data-screen={base}>
       <MapView
-        theme={theme}
+        theme={mapData.grab && mapDesign === 'night' ? 'dark' : theme}
         mapData={mapData}
+        mapDesign={mapDesign}
+        buildings3d={buildings3d}
+        car={car}
         mode={mapMode}
         position={base === 'nav' ? shownNavPos : realPos}
         heading={base === 'nav' ? navHeading : compass}
@@ -712,13 +723,12 @@ export default function App() {
           {accountView.mounted && (
             <AccountScreen
               profile={profile}
-              theme={theme}
               leaving={accountView.leaving ? leaveStyle : null}
               onSaveName={(name) => {
                 setProfile({ ...profile, name });
                 showToast(`Saved! Family sees you as ${name}`);
               }}
-              onToggleTheme={toggleTheme}
+              onCustomise={() => go('customise')}
               lang={lang}
               onLang={setLang}
               onTestVoice={(l) => speak(PHRASES.test[l], l)}
@@ -728,6 +738,23 @@ export default function App() {
                 setProfile(null);
                 setPhase('login');
               }}
+              onBack={back}
+            />
+          )}
+
+          {customiseView.mounted && (
+            <CustomiseScreen
+              theme={theme}
+              autoTheme={autoTheme}
+              mapDesign={mapData.grab ? mapDesign : null}
+              buildings3d={buildings3d}
+              car={car}
+              leaving={customiseView.leaving ? leaveStyle : null}
+              onToggleTheme={toggleTheme}
+              onAutoTheme={setAutoTheme}
+              onMapDesign={setMapDesign}
+              onBuildings3d={setBuildings3d}
+              onCar={setCar}
               onBack={back}
             />
           )}

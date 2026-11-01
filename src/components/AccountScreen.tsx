@@ -1,16 +1,14 @@
 import { useState } from 'react';
 import { APP_VERSION, initials, type Profile } from '../lib/models';
 import type { Lang } from '../lib/instructions';
-import type { Theme } from '../hooks/useTheme';
 import { BackIcon, ChatIcon, MoonIcon, SoundIcon } from './icons';
 
 interface Props {
   profile: Profile;
-  theme: Theme;
   lang: Lang;
   leaving: 'pop' | 'fade' | null;
   onSaveName: (name: string) => void;
-  onToggleTheme: () => void;
+  onCustomise: () => void;
   onLang: (lang: Lang) => void;
   onTestVoice: (lang: Lang) => void;
   onFeedback: () => void;
@@ -26,7 +24,6 @@ function maskPhone(digits: string) {
 export default function AccountScreen(p: Props) {
   const [name, setName] = useState(p.profile.name);
   const clean = name.trim();
-  const dark = p.theme === 'dark';
 
   return (
     <div className={`screen screen-push page${p.leaving ? ` leave-${p.leaving}` : ''}`}>
@@ -76,25 +73,16 @@ export default function AccountScreen(p: Props) {
         </form>
 
         <h2 className="section-label">Appearance</h2>
-        <div className="card setting-row">
-          <span className="row-icon tinted">
-            <MoonIcon size={20} />
-          </span>
-          <span className="row-text">
-            <span id="acc-dark" className="row-title">
-              Dark mode
+        <div className="card list">
+          <button type="button" className="row" onClick={p.onCustomise}>
+            <span className="row-icon tinted">
+              <MoonIcon size={20} />
             </span>
-            <span className="row-sub">Easier on the eyes at night</span>
-          </span>
-          <button
-            type="button"
-            role="switch"
-            aria-checked={dark}
-            aria-labelledby="acc-dark"
-            className={`switch${dark ? ' is-on' : ''}`}
-            onClick={p.onToggleTheme}
-          >
-            <span className="switch-knob" />
+            <span className="row-text">
+              <span className="row-title">Customise</span>
+              <span className="row-sub">Dark mode, map style, 3D and your car</span>
+            </span>
+            <span className="row-meta">›</span>
           </button>
         </div>
 

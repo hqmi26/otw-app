@@ -1,9 +1,15 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { sunIsDown, type LngLat } from '../lib/geo';
 
 export type Theme = 'light' | 'dark';
 
 const STORAGE_KEY = 'otw-theme';
+const AUTO_KEY = 'otw-theme-auto';
 const media = window.matchMedia('(prefers-color-scheme: dark)');
+
+/** Used for the sun until the phone's location comes in. */
+const KOTA_KINABALU: LngLat = [116.0762, 5.9836];
+const SUN_CHECK_MS = 60_000;
 
 function readSaved(): Theme | null {
   try {
@@ -14,10 +20,25 @@ function readSaved(): Theme | null {
   }
 }
 
-/** Follows the phone's light/dark setting until the user picks one. */
-export function useTheme() {
+function readAuto(): boolean {
+  try {
+    return localStorage.getItem(AUTO_KEY) === 'on';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Follows the phone's light/dark setting until the user picks one. With Auto
+ * day and night on, it follows the sun at `near` instead.
+ */
+export function useTheme(near: LngLat | null) {
   const [saved, setSaved] = useState<Theme | null>(readSaved);
   const [systemDark, setSystemDark] = useState(media.matches);
+  const [auto, setAutoOn] = useState(readAuto);
+  const here = useRef(near ?? KOTA_KINABALU);
+  here.current = near ?? here.current;
+  const [night, setNight] = useState(() => sunIsDown(new Date(), here.current));
 
   useEffect(() => {
     const onChange = (e: MediaQueryListEvent) => setSystemDark(e.matches);
@@ -25,7 +46,15 @@ export function useTheme() {
     return () => media.removeEventListener('change', onChange);
   }, []);
 
-  const theme: Theme = saved ?? (systemDark ? 'dark' : 'light');
+  useEffect(() => {
+    if (!auto) return;
+    const check = () => setNight(sunIsDown(new Date(), here.current));
+    check();
+    const timer = window.setInterval(check, SUN_CHECK_MS);
+    return () => window.clearInterval(timer);
+  }, [auto]);
+
+  const theme: Theme = auto ? (night ? 'dark' : 'light') : (saved ?? (systemDark ? 'dark' : 'light'));
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -44,5 +73,14 @@ export function useTheme() {
     }
   };
 
-  return { theme, toggle };
+  const setAuto = (on: boolean) => {
+    setAutoOn(on);
+    try {
+      localStorage.setItem(AUTO_KEY, on ? 'on' : 'off');
+    } catch {
+      // Private mode: the choice just won't be remembered.
+    }
+  };
+
+  return { theme, toggle, auto, setAuto };
 }

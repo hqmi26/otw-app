@@ -138,7 +138,8 @@ async function mapFile(path: string[], request: Request, key: string): Promise<R
   let upstream: URL;
   if (path[0] === 'style') {
     const scheme = url.searchParams.get('scheme') === 'Dark' ? 'Dark' : 'Light';
-    upstream = new URL(`${MAPS}v2/styles/Standard/descriptor?color-scheme=${scheme}`);
+    const design = url.searchParams.get('design') === 'Monochrome' ? 'Monochrome' : 'Standard';
+    upstream = new URL(`${MAPS}v2/styles/${design}/descriptor?color-scheme=${scheme}`);
   } else if (path[0] === 'v2') {
     // Taken from the address as sent: font names have spaces in them, already encoded.
     upstream = new URL(`${MAPS}${url.pathname.slice(url.pathname.indexOf('/map/') + 5)}${url.search}`);
