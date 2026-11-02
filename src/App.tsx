@@ -505,7 +505,8 @@ export default function App() {
     if (toTurn < 60 && !spoken.current.has(near)) {
       spoken.current.add(near);
       spoken.current.add(far);
-      speak(instruction(step, lang), lang);
+      // The arrival itself is said once, just above.
+      if (step.type !== 'arrive') speak(instruction(step, lang), lang);
     } else if (toTurn < 400 && !spoken.current.has(far)) {
       spoken.current.add(far);
       speak(aheadPhrase(toTurn, step, lang), lang);
