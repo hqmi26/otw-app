@@ -1,122 +1,167 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  accountApi,
+  AccountError,
   areaAt,
-  familyApi,
-  FamilyError,
   type Area,
-  type FamilyPatch,
-  type FamilyState,
-} from '../lib/family';
+  type GroupsState,
+  type NewGroup,
+  type StatusPatch,
+} from '../lib/groups';
 import { distance, type LngLat } from '../lib/geo';
 import { useStored } from './useStored';
 
-/** How often the Family list refreshes: quicker while someone's car is moving. */
+/** How often the groups refresh: quicker while someone's car is moving. */
 const POLL_MS = 30000;
 const POLL_LIVE_MS = 10000;
 
 /**
- * Your family group: who's in it and where (by area), kept fresh from the
- * server while the app is open. The phone's secret token is kept in storage.
+ * Your account and groups. Every phone gets a hidden ID and a secret token the
+ * first time it opens OTW. Only someone in a group keeps hearing from the
+ * server; the rest just ask once when the app opens.
  */
-export function useFamily(enabled: boolean) {
-  const [token, setToken] = useStored<string | null>('otw-family-token', null, (v) => v == null || typeof v === 'string');
-  const [state, setState] = useState<FamilyState | null>(null);
+export function useGroups(enabled: boolean) {
+  const [token, setToken] = useStored<string | null>('otw-token', null, (v) => v == null || typeof v === 'string');
+  const [state, setState] = useState<GroupsState | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const tokenRef = useRef(token);
   tokenRef.current = token;
 
   const forget = useCallback(() => {
+    tokenRef.current = null;
     setToken(null);
     setState(null);
   }, [setToken]);
 
-  /** Runs a request; if the server no longer knows this phone, forget the family. */
+  /** This phone's key, made the first time it's needed. */
+  const making = useRef<Promise<string> | null>(null);
+  const ensureToken = useCallback((): Promise<string> => {
+    if (tokenRef.current) return Promise.resolve(tokenRef.current);
+    making.current ??= accountApi
+      .guest()
+      .then((r) => {
+        tokenRef.current = r.token;
+        setToken(r.token);
+        return r.token;
+      })
+      .finally(() => {
+        making.current = null;
+      });
+    return making.current;
+  }, [setToken]);
+
+  /** Runs a request; if the server no longer knows this phone, it starts again as a new guest. */
   const guard = useCallback(
-    async <T>(run: () => Promise<T>): Promise<T> => {
+    async <T>(run: (token: string) => Promise<T>): Promise<T> => {
       try {
-        return await run();
+        return await run(await ensureToken());
       } catch (e) {
-        if (e instanceof FamilyError && e.status === 401) forget();
+        if (e instanceof AccountError && e.status === 401) forget();
         throw e;
       }
     },
-    [forget],
+    [ensureToken, forget],
   );
 
   const refresh = useCallback(async () => {
-    const t = tokenRef.current;
-    if (!t) return;
     try {
-      setState(await guard(() => familyApi.state(t)));
+      setState(await guard(accountApi.state));
       setLoadError(null);
     } catch (e) {
-      setLoadError(e instanceof Error ? e.message : 'Couldn’t load your family.');
+      setLoadError(e instanceof Error ? e.message : 'Couldn’t load your groups.');
     }
   }, [guard]);
 
-  const someoneLive = state?.members.some((m) => m.id !== state.me && m.live) ?? false;
+  const inGroup = (state?.groups.length ?? 0) > 0;
+  const someoneLive = state?.groups.some((g) => g.members.some((m) => m.id !== state.me && m.live)) ?? false;
   useEffect(() => {
-    if (!enabled || !token) return;
+    if (!enabled) return;
     void refresh();
-    const id = window.setInterval(() => {
-      if (document.visibilityState === 'visible') void refresh();
-    }, someoneLive ? POLL_LIVE_MS : POLL_MS);
     const onVisible = () => {
       if (document.visibilityState === 'visible') void refresh();
     };
+    const id = inGroup ? window.setInterval(onVisible, someoneLive ? POLL_LIVE_MS : POLL_MS) : undefined;
     document.addEventListener('visibilitychange', onVisible);
     return () => {
       window.clearInterval(id);
       document.removeEventListener('visibilitychange', onVisible);
     };
-  }, [enabled, token, someoneLive, refresh]);
+  }, [enabled, token, inGroup, someoneLive, refresh]);
 
   const start = useCallback(
-    async (name: string) => {
-      const r = await familyApi.start(name, tokenRef.current);
-      setToken(r.token);
-      setState(r.family);
-    },
-    [setToken],
-  );
-
-  const join = useCallback(
-    async (code: string, name: string) => {
-      const r = await familyApi.join(code, name, tokenRef.current);
-      setToken(r.token);
-      setState(r.family);
-    },
-    [setToken],
-  );
-
-  const update = useCallback(
-    async (patch: FamilyPatch) => {
-      const t = tokenRef.current;
-      if (!t) return;
-      setState(await guard(() => familyApi.update(t, patch)));
+    async (group: NewGroup) => {
+      const next = await guard((t) => accountApi.start(t, group));
+      setState(next);
+      return next;
     },
     [guard],
   );
 
-  const newLink = useCallback(async () => {
-    const t = tokenRef.current;
-    if (t) setState(await guard(() => familyApi.newLink(t)));
-  }, [guard]);
+  const join = useCallback(
+    async (code: string, name: string) => setState(await guard((t) => accountApi.join(t, code, name))),
+    [guard],
+  );
 
-  const leave = useCallback(async () => {
-    const t = tokenRef.current;
-    if (t) await familyApi.leave(t).catch(() => {});
-    forget();
-  }, [forget]);
+  const update = useCallback(
+    async (patch: StatusPatch) => setState(await guard((t) => accountApi.update(t, patch))),
+    [guard],
+  );
 
-  const me = state?.members.find((m) => m.id === state.me) ?? null;
+  const newLink = useCallback(
+    async (groupId: string) => setState(await guard((t) => accountApi.newLink(t, groupId))),
+    [guard],
+  );
+
+  const leave = useCallback(
+    async (groupId: string) => setState(await guard((t) => accountApi.leave(t, groupId))),
+    [guard],
+  );
+
+  const remove = useCallback(
+    async (groupId: string, userId: string) => setState(await guard((t) => accountApi.remove(t, groupId, userId))),
+    [guard],
+  );
+
+  /** Tells the server, then forgets this phone's key. Throws if the server can't be reached. */
+  const finish = useCallback(
+    async (call: (token: string) => Promise<unknown>) => {
+      const t = tokenRef.current;
+      if (t) {
+        await call(t).catch((e: unknown) => {
+          // The server already doesn't know this phone, so there's nothing left to do there.
+          if (!(e instanceof AccountError && e.status === 401)) throw e;
+        });
+      }
+      forget();
+    },
+    [forget],
+  );
+  const logout = useCallback(() => finish(accountApi.logout), [finish]);
+  const deleteAccount = useCallback(() => finish(accountApi.deleteAccount), [finish]);
+
+  const family = state?.groups.find((g) => g.type === 'family') ?? null;
   return useMemo(
-    () => ({ token, state, me, inFamily: token != null, loadError, refresh, start, join, update, newLink, leave }),
-    [token, state, me, loadError, refresh, start, join, update, newLink, leave],
+    () => ({
+      token,
+      state,
+      family,
+      loadError,
+      ensureToken,
+      refresh,
+      start,
+      join,
+      update,
+      newLink,
+      leave,
+      remove,
+      logout,
+      deleteAccount,
+    }),
+    [token, state, family, loadError, ensureToken, refresh, start, join, update, newLink, leave, remove, logout, deleteAccount],
   );
 }
 
-export type Family = ReturnType<typeof useFamily>;
+export type Groups = ReturnType<typeof useGroups>;
 
 /** Work the area out again after moving this far. */
 const AREA_RECHECK_M = 150;
@@ -148,6 +193,8 @@ export function useArea(position: LngLat | null): Area | null {
 export interface Sharing {
   area: Area | null;
   trip: { to: string; eta: number } | null;
+  /** Normal groups this trip is shared with. */
+  shareWith: string[];
   live: { lat: number; lng: number; heading: number | null } | null;
 }
 
@@ -174,26 +221,27 @@ const NOTHING_SENT: Sent = { area: null, areaAt: 0, trip: null, eta: 0, tripAt: 
 
 /**
  * Sends your area, trip ETA and (only during a live trip) the moving car to
- * the family, without flooding the server: only when something changed, or
+ * your groups, without flooding the server: only when something changed, or
  * now and then to say you're still there. Nothing is sent while Private is on.
  */
-export function useFamilySharing(family: Family, share: Sharing) {
+export function useGroupSharing(groups: Groups, share: Sharing) {
   const sent = useRef<Sent>(NOTHING_SENT);
   const busyUntil = useRef(0);
-  const isPrivate = family.me?.private ?? true;
+  const isPrivate = groups.state?.private ?? true;
+  const inGroup = (groups.state?.groups.length ?? 0) > 0;
 
   // Coming back from Private (or joining) starts afresh, so everything goes out at once.
   useEffect(() => {
     sent.current = NOTHING_SENT;
-  }, [isPrivate, family.token]);
+  }, [isPrivate, inGroup, groups.token]);
 
-  const { area, trip, live } = share;
+  const { area, trip, shareWith, live } = share;
   useEffect(() => {
-    if (!family.token || !family.me || isPrivate) return;
+    if (!groups.token || !inGroup || isPrivate) return;
     const now = Date.now();
     if (now < busyUntil.current) return;
     const s = sent.current;
-    const patch: FamilyPatch = {};
+    const patch: StatusPatch = {};
 
     if (area && (area.name !== s.area || now - s.areaAt > AREA_HEARTBEAT_MS)) patch.area = area;
     const tripTo = trip?.to ?? null;
@@ -202,12 +250,13 @@ export function useFamilySharing(family: Family, share: Sharing) {
     } else if (trip && (Math.abs(trip.eta - s.eta) >= ETA_CHANGE_S || now - s.tripAt > TRIP_EVERY_MS)) {
       patch.trip = trip;
     }
+    if (patch.trip) patch.shareWith = shareWith;
     if (live && now - s.liveAt >= LIVE_EVERY_MS) patch.live = live;
     else if (!live && s.live && patch.trip === undefined) patch.live = null;
     if (Object.keys(patch).length === 0) return;
 
     busyUntil.current = now + RETRY_MS;
-    family
+    groups
       .update(patch)
       .then(() => {
         const next = { ...sent.current };
@@ -221,5 +270,5 @@ export function useFamilySharing(family: Family, share: Sharing) {
       .catch(() => {
         // No signal: keep what we had and try again after RETRY_MS.
       });
-  }, [family, isPrivate, area, trip, live]);
+  }, [groups, inGroup, isPrivate, area, trip, shareWith, live]);
 }

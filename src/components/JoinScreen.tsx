@@ -1,20 +1,20 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { familyApi, type InvitePreview } from '../lib/family';
-import type { Family } from '../hooks/useFamily';
+import { accountApi, type InvitePreview } from '../lib/groups';
+import type { Groups } from '../hooks/useGroups';
 import { initials } from '../lib/models';
 import { OtwWordmark } from './brand';
 import { CarIcon, CheckIcon, LockIcon, PinIcon } from './icons';
 
 interface Props {
   code: string;
-  family: Family;
+  groups: Groups;
   /** The name already on this phone, if OTW was set up before. */
   name: string | null;
   /** Joined (or skipped): carry on into the app. */
   onDone: (name: string | null) => void;
 }
 
-/** Opened from an invite link (design screen 5d): type a name, join the family. No password. */
+/** Opened from an invite link (design screen 5d): type a name, join the group. No password. */
 export default function JoinScreen(p: Props) {
   const [preview, setPreview] = useState<InvitePreview | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
@@ -23,11 +23,11 @@ export default function JoinScreen(p: Props) {
   const [joined, setJoined] = useState(false);
   const clean = name.trim();
 
-  // Look the link up once; joining changes the token, but not the invite.
-  const firstToken = useRef(p.family.token);
+  // Look the link up once; joining can change the token, but not the invite.
+  const firstToken = useRef(p.groups.token);
   useEffect(() => {
     let live = true;
-    familyApi
+    accountApi
       .invite(p.code, firstToken.current)
       .then((r) => live && setPreview(r))
       .catch((e: Error) => live && setProblem(e.message));
@@ -42,7 +42,7 @@ export default function JoinScreen(p: Props) {
     setBusy(true);
     setProblem(null);
     try {
-      await p.family.join(p.code, clean);
+      await p.groups.join(p.code, clean);
       setJoined(true);
     } catch (err) {
       setProblem(err instanceof Error ? err.message : 'Couldn’t join. Try again.');
@@ -50,6 +50,8 @@ export default function JoinScreen(p: Props) {
       setBusy(false);
     }
   };
+
+  const isFamily = preview?.type !== 'normal';
 
   if (joined) {
     return (
@@ -59,7 +61,11 @@ export default function JoinScreen(p: Props) {
           <CheckIcon size={34} />
         </span>
         <h1 className="login-title">You’re in, {clean}!</h1>
-        <p className="login-lead">Next, OTW asks to use your location. Your family will only see your area.</p>
+        <p className="login-lead">
+          {isFamily
+            ? 'Next, OTW asks to use your location. Your family will only see your area.'
+            : 'Next, OTW asks to use your location. This group sees nothing until you share a trip.'}
+        </p>
         <button type="button" className="primary-btn" onClick={() => p.onDone(clean)}>
           Open the map
         </button>
@@ -85,7 +91,7 @@ export default function JoinScreen(p: Props) {
       {!preview && problem && (
         <>
           <h1 className="login-title">This invite link doesn’t work</h1>
-          <p className="login-lead">{problem}. Ask your family to send a new link from OTW → Family.</p>
+          <p className="login-lead">{problem}. Ask for a new link from OTW → Groups.</p>
           <button type="button" className="primary-btn" onClick={() => p.onDone(null)}>
             Open OTW
           </button>
@@ -94,7 +100,7 @@ export default function JoinScreen(p: Props) {
 
       {preview && preview.full && !preview.alreadyIn && (
         <>
-          <h1 className="login-title">This family is full</h1>
+          <h1 className="login-title">This group is full</h1>
           <p className="login-lead">It already has {names.length} people, the most OTW allows for now.</p>
           <button type="button" className="primary-btn" onClick={() => p.onDone(null)}>
             Open OTW
@@ -114,9 +120,11 @@ export default function JoinScreen(p: Props) {
               {names.length > 3 && <span className="avatar is-more">+{names.length - 3}</span>}
             </span>
           )}
-          <h1 className="login-title">You’re invited to the family on OTW</h1>
+          <h1 className="login-title">
+            {isFamily ? 'You’re invited to the family on OTW' : `You’re invited to ${preview.groupName} on OTW`}
+          </h1>
           <p className="login-lead">
-            {preview.alreadyIn ? 'You’re already in this family.' : `${who} ${names.length === 1 ? 'is' : 'are'} already in.`}
+            {preview.alreadyIn ? 'You’re already in this group.' : `${who} ${names.length === 1 ? 'is' : 'are'} already in.`}
           </p>
 
           <label className="field-label" htmlFor="join-name">
@@ -132,13 +140,20 @@ export default function JoinScreen(p: Props) {
             value={name}
             onChange={(e) => setName(e.target.value)}
           />
-          <span className="field-hint">Your family will see this name.</span>
+          <span className="field-hint">{isFamily ? 'Your family will see this name.' : 'This group will see this name.'}</span>
 
           <ul className="join-points">
-            <li>
-              <PinIcon size={20} />
-              Family see your area, like Likas, never your exact spot.
-            </li>
+            {isFamily ? (
+              <li>
+                <PinIcon size={20} />
+                Family see your area, like Likas, never your exact spot.
+              </li>
+            ) : (
+              <li>
+                <PinIcon size={20} />
+                This group sees nothing until you share a trip with it.
+              </li>
+            )}
             <li>
               <LockIcon size={20} />
               Turn on Private any time to hide.
@@ -149,6 +164,12 @@ export default function JoinScreen(p: Props) {
             </li>
           </ul>
 
+          {preview.leavesFamily && (
+            <p className="privacy-note" role="status">
+              You can only be in one family group, so joining this one takes you out of the one you’re in.
+            </p>
+          )}
+
           {problem && (
             <p className="privacy-note is-error" role="alert">
               {problem}
@@ -156,7 +177,7 @@ export default function JoinScreen(p: Props) {
           )}
 
           <button type="submit" className="primary-btn login-btn" disabled={clean.length < 2 || busy}>
-            {busy ? 'Joining…' : preview.alreadyIn ? 'Open the family' : 'Join family'}
+            {busy ? 'Joining…' : preview.alreadyIn ? 'Open the group' : isFamily ? 'Join family' : 'Join group'}
           </button>
           <p className="login-note">No password. No sign-up.</p>
         </>

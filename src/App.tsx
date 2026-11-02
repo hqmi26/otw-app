@@ -9,7 +9,9 @@ import RouteSheet from './components/RouteSheet';
 import NavigationView from './components/NavigationView';
 import LocationScreen from './components/LocationScreen';
 import AccountScreen from './components/AccountScreen';
-import FamilyScreen from './components/FamilyScreen';
+import GroupsScreen from './components/GroupsScreen';
+import NewGroupScreen from './components/NewGroupScreen';
+import GroupScreen from './components/GroupScreen';
 import PrivacyScreen from './components/PrivacyScreen';
 import ReportInfoSheet from './components/ReportInfoSheet';
 import { fetchReports, shareReport, voteReport } from './lib/reports';
@@ -44,12 +46,12 @@ import {
   type SavedKind,
   type SavedPlace,
 } from './lib/models';
-import { inviteCodeFromPath, memberColor, type FamilyMember } from './lib/family';
+import { inviteCodeFromPath, memberColor, peopleInView, type Group, type GroupMember } from './lib/groups';
 import { speak, stopSpeaking } from './lib/voice';
 import { keepScreenOn, letScreenSleep } from './lib/keepAwake';
 import { countOpen, countTrip } from './lib/visits';
 import { useGeolocation } from './hooks/useGeolocation';
-import { useArea, useFamily, useFamilySharing } from './hooks/useFamily';
+import { useArea, useGroups, useGroupSharing } from './hooks/useGroups';
 import { useTheme } from './hooks/useTheme';
 import { useRecents } from './hooks/useRecents';
 import { useStored } from './hooks/useStored';
@@ -62,7 +64,9 @@ type Screen =
   | 'search'
   | 'route'
   | 'nav'
-  | 'family'
+  | 'groups'
+  | 'newgroup'
+  | 'group'
   | 'account'
   | 'privacy'
   | 'report'
@@ -74,7 +78,7 @@ type Screen =
 /** Screens that open as a sheet over whatever is underneath. */
 const MODALS: Screen[] = ['report', 'save', 'steps', 'feedback', 'reportinfo'];
 /** Full-screen pages opened from home; home stays mounted underneath them. */
-const HOME_OVERLAYS: Screen[] = ['search', 'account', 'privacy', 'family', 'report', 'save', 'feedback'];
+const HOME_OVERLAYS: Screen[] = ['search', 'account', 'privacy', 'groups', 'newgroup', 'group', 'report', 'save', 'feedback'];
 
 /**
  * Add ?sim to the address to fake the drive, e.g. testing on a laptop. It also
@@ -109,6 +113,10 @@ export default function App() {
   const geo = useGeolocation();
   const { recents, add: addRecent } = useRecents();
   const [profile, setProfile] = useStored<Profile | null>('otw-profile', null, (v) => v == null || typeof v === 'object');
+  // OTW used to ask for a phone number. It never left the phone, and it isn't needed any more.
+  useEffect(() => {
+    if (profile && 'phone' in profile) setProfile({ name: profile.name });
+  }, [profile, setProfile]);
   const [saved, setSaved] = useStored<SavedPlace[]>('otw-saved', [], isArray);
   const [reports, setReports] = useStored<HazardReport[]>('otw-reports', [], isArray);
   /** Places the user added because search couldn't find them (on this phone until accounts exist). */
@@ -116,7 +124,7 @@ export default function App() {
   /** Language for turn instructions and voice (Account → Voice directions). */
   const [lang, setLang] = useStored<Lang>('otw-voice-lang', 'en', (v) => v === 'en' || v === 'ms');
 
-  // --- Opening: logo intro, then login the first time (or joining, from a family invite link). ---
+  // --- Opening: logo intro, then the welcome the first time (or joining, from an invite link). ---
   const [phase, setPhase] = useState<'intro' | 'join' | 'login' | 'app'>('intro');
   const [inviteCode, setInviteCode] = useState(() => inviteCodeFromPath(window.location.pathname));
   const hasProfile = useRef(profile != null);
@@ -127,13 +135,17 @@ export default function App() {
       setPhase((ph) => (ph === 'intro' ? (hasInvite.current ? 'join' : hasProfile.current ? 'app' : 'login') : ph)),
     [],
   );
-  const family = useFamily(phase === 'app' && profile != null);
+  /** Logging out or deleting: the account is going, so no new one is made meanwhile. */
+  const [closing, setClosing] = useState(false);
+  // Waits for location, so only a real driver gets a hidden ID, not a robot reading the page.
+  const groups = useGroups(phase === 'app' && profile != null && (geo.fix != null || FORCE_SIM) && !closing);
   // How many phones use OTW: one anonymous count a day (Account → Privacy & data).
   useEffect(() => {
     if (phase === 'app') countOpen();
   }, [phase]);
-  /** In a family and not on Private: your area and ETA go to the family. */
-  const canShare = family.me != null && !family.me.private;
+  /** In a group and not on Private: what you choose to share can go out. */
+  const canShare = (groups.state?.groups.length ?? 0) > 0 && !groups.state?.private;
+  const normalGroups = useMemo(() => groups.state?.groups.filter((g) => g.type === 'normal') ?? [], [groups.state]);
 
   // --- Screens. Kept in browser history so the phone's back gesture works. ---
   const [stack, setStack] = useState<Screen[]>(['home']);
@@ -169,6 +181,11 @@ export default function App() {
     const steps = stackRef.current.length - 1 - depth;
     if (steps > 0) window.history.go(-steps);
   }, []);
+  /** Swaps the page on top, so back skips it. */
+  const swapTop = useCallback((next: Screen) => {
+    lastMove.current = 'push';
+    setStack((s) => [...s.slice(0, -1), next]);
+  }, []);
 
   // --- Little confirmation messages ---
   const [toast, setToast] = useState<{ text: string; id: number } | null>(null);
@@ -193,8 +210,10 @@ export default function App() {
   const [placeToSave, setPlaceToSave] = useState<Place | null>(null);
   /** A stop on the way, e.g. fetching Adik from school on the way home. */
   const [stop, setStop] = useState<Place | null>(null);
-  /** Family see the car move on this trip. Set before Start; off again after every trip. */
+  /** Your groups see the car move on this trip. Set before Start; off again after every trip. */
   const [shareLive, setShareLive] = useState(false);
+  /** Normal groups that see this trip. Set before Start; empty again after every trip. */
+  const [shareWith, setShareWith] = useState<string[]>([]);
   const [pickStart, setPickStart] = useState<LngLat | null>(null);
   const pickRef = useRef<(() => LngLat | null) | null>(null);
 
@@ -232,6 +251,7 @@ export default function App() {
       setRoutes(null);
       setActiveRoute(null);
       setShareLive(false);
+      setShareWith([]);
       stopSpeaking();
     }
   }, [stack]);
@@ -668,31 +688,36 @@ export default function App() {
     speak(hazardPhrase(hazardAhead.report.type, hazardAhead.distance, lang), lang, { queue: true });
   }, [hazardAhead, muted, lang]);
 
-  // --- Family sharing: your area always, the trip ETA while driving, and the
-  // moving car only when "Share live trip" was switched on for this trip. ---
-  // Not looked up on Private: nothing about you goes anywhere for it.
-  const myArea = useArea(phase === 'app' && canShare ? realPos : null);
+  // --- Sharing with your groups. A family group gets your area always and the
+  // trip ETA while driving; a normal group gets the trip only if it was chosen
+  // before Start. The moving car only when "Share live trip" was switched on. ---
+  // Only worked out for a family group, and not on Private: nothing about you goes anywhere for it.
+  const myArea = useArea(phase === 'app' && canShare && groups.family ? realPos : null);
   // Once arrived, sharing stays off even if the car moves again before Done is tapped.
   const tripFinished = useRef(false);
   if (progress?.arrived) tripFinished.current = true;
-  // A demo drive (no GPS) isn't real, so family don't see it, unless testing with ?sim.
+  const tripHasViewers = canShare && (groups.family != null || shareWith.length > 0);
+  // A demo drive (no GPS) isn't real, so groups don't see it, unless testing with ?sim.
   const tripShare =
-    canShare && base === 'nav' && destination && progress && !tripFinished.current && remainingTime != null && (!simulate || FORCE_SIM)
+    tripHasViewers && base === 'nav' && destination && progress && !tripFinished.current && remainingTime != null && (!simulate || FORCE_SIM)
       ? { to: savedAs ?? destination.name, eta: Math.round(Date.now() / 1000 + remainingTime) }
       : null;
   const liveShare =
     tripShare && shareLive && shownNavPos ? { lat: shownNavPos[1], lng: shownNavPos[0], heading: travelHeading } : null;
-  useFamilySharing(family, { area: myArea, trip: tripShare, live: liveShare });
+  useGroupSharing(groups, { area: myArea, trip: tripShare, shareWith, live: liveShare });
+  /** Who sees this trip, in words. */
+  const tripViewers = [...(groups.family ? ['family'] : []), ...normalGroups.filter((g) => shareWith.includes(g.id)).map((g) => g.name)];
+  const tripViewersText = tripViewers.length === 1 ? tripViewers[0] : 'your groups';
 
-  // Family on the home map: one circle per area, and a car for anyone on a live trip.
+  // People on the home map: one circle per area, and a car for anyone on a live trip.
   const onTrip = stack.includes('route') || stack.includes('nav');
   const familyPins = useMemo(() => {
-    const state = family.state;
+    const state = groups.state;
     if (!state || onTrip) return [];
     const pins: FamilyPin[] = [];
     const areas = new Map<string, { pin: FamilyPin; names: string[] }>();
-    for (const m of state.members) {
-      if (m.id === state.me || m.private) continue;
+    for (const m of peopleInView(state)) {
+      if (m.private) continue;
       const person = { initials: initials(m.name), color: memberColor(state, m.id) ?? '#0e7c6b' };
       if (m.live) {
         pins.push({
@@ -720,14 +745,62 @@ export default function App() {
       pin.label = `${who} · ${area}`;
     }
     return pins;
-  }, [family.state, onTrip]);
+  }, [groups.state, onTrip]);
 
   const [familyFocus, setFamilyFocus] = useState<{ coord: LngLat; key: number } | null>(null);
-  const showMember = (m: FamilyMember) => {
+  const showMember = (m: GroupMember) => {
     const coord: LngLat | null = m.live ? [m.live.lng, m.live.lat] : m.area ? [m.area.lng, m.area.lat] : null;
     if (!coord) return;
     setFamilyFocus({ coord, key: Date.now() });
     if (base !== 'home') backTo(0);
+  };
+
+  // --- Groups pages ---
+  const [groupId, setGroupId] = useState<string | null>(null);
+  const openGroup = (group: Group) => {
+    setGroupId(group.id);
+    go('group');
+  };
+  const group = groups.state?.groups.find((g) => g.id === groupId) ?? null;
+  // Left the group, or was removed from it while looking at it.
+  useEffect(() => {
+    if (top === 'group' && groups.state && !group) back();
+  }, [top, groups.state, group, back]);
+
+  // --- Leaving: both tell the server first, so "done" is never said when it wasn't. ---
+  const closeAccount = async (action: () => Promise<void>, failed: string, done: () => void) => {
+    setClosing(true);
+    try {
+      await action();
+      done();
+    } catch {
+      showToast(failed);
+    } finally {
+      setClosing(false);
+    }
+  };
+  const logOut = () => {
+    const warning =
+      'Log out? You’re a guest, so this account can’t come back: you’d leave your groups and need new invite links. Saved places stay on this phone.';
+    if (!window.confirm(warning)) return;
+    void closeAccount(groups.logout, 'Couldn’t log out. Check your internet and try again', () => {
+      backTo(0);
+      setProfile(null);
+      setPhase('login');
+    });
+  };
+  const deleteAccount = () => {
+    const warning =
+      'Delete your account? Your account, your place in your groups and your saved places are erased, and this can’t be undone. Road reports you sent stay, with no link to you.';
+    if (!window.confirm(warning)) return;
+    void closeAccount(groups.deleteAccount, 'Couldn’t delete your account. Check your internet and try again', () => {
+      try {
+        localStorage.clear();
+      } catch {
+        // Storage is blocked, so nothing was kept on this phone anyway.
+      }
+      window.location.replace('/');
+    });
   };
 
   // --- Leaving animations for full-screen pages ---
@@ -735,7 +808,9 @@ export default function App() {
   const searchView = usePresence(phase === 'app' && (base === 'search' || top === 'search'));
   const accountView = usePresence(phase === 'app' && base === 'account');
   const privacyView = usePresence(phase === 'app' && base === 'privacy');
-  const familyView = usePresence(phase === 'app' && base === 'family');
+  const groupsView = usePresence(phase === 'app' && base === 'groups');
+  const newGroupView = usePresence(phase === 'app' && base === 'newgroup');
+  const groupView = usePresence(phase === 'app' && base === 'group' && group != null);
   const reportView = usePresence(phase === 'app' && top === 'report', 250);
   const reportInfoView = usePresence(phase === 'app' && top === 'reportinfo' && tappedReport != null, 250);
   const saveView = usePresence(phase === 'app' && top === 'save' && placeToSave != null, 250);
@@ -758,8 +833,9 @@ export default function App() {
   const mapMode: MapMode =
     base === 'nav' ? 'nav' : base === 'route' ? 'preview' : base === 'addplace' ? 'pick' : 'browse';
   const baseInsets = INSETS[base] ?? NO_INSETS;
-  // The "Share live trip" row makes the route sheet taller.
-  const insets = base === 'route' && canShare ? { top: baseInsets.top, bottom: baseInsets.bottom + 60 } : baseInsets;
+  // The sharing rows make the route sheet taller.
+  const shareRows = (tripHasViewers ? 60 : 0) + (canShare && normalGroups.length > 0 ? 100 : 0);
+  const insets = base === 'route' ? { top: baseInsets.top, bottom: baseInsets.bottom + shareRows } : baseInsets;
   // Keep the home screen alive under full-screen pages opened from it, so going
   // back is instant instead of rebuilding (and re-animating) the whole screen.
   const homeAlive = base === 'home' || (HOME_OVERLAYS.includes(base) && !onTrip);
@@ -807,7 +883,7 @@ export default function App() {
             <div className="home-layer" inert={base !== 'home'}>
             <HomeScreen
               profile={profile}
-              family={family}
+              groups={groups}
               myArea={myArea?.name ?? null}
               position={realPos}
               locationNote={locationNote}
@@ -828,7 +904,7 @@ export default function App() {
                 setRecenterKey((k) => k + 1);
               }}
               onReport={() => go('report')}
-              onFamily={() => go('family')}
+              onGroups={() => go('groups')}
               onShowMember={showMember}
               onFeedback={() => go('feedback')}
             />
@@ -845,7 +921,12 @@ export default function App() {
               error={routeError}
               selected={selected}
               rush={rushHourFactor(new Date())}
-              shareLive={canShare ? shareLive : null}
+              shareGroups={canShare ? normalGroups.map((g) => ({ id: g.id, name: g.name, on: shareWith.includes(g.id) })) : []}
+              onToggleShareGroup={(id) =>
+                setShareWith((list) => (list.includes(id) ? list.filter((x) => x !== id) : [...list, id]))
+              }
+              shareLive={tripHasViewers ? shareLive : null}
+              shareLiveWith={tripViewersText}
               onToggleShareLive={() => setShareLive((on) => !on)}
               onSelect={setSelected}
               onShowSteps={() => go('steps')}
@@ -887,7 +968,7 @@ export default function App() {
               onShowSteps={() => go('steps')}
               onReport={() => go('report')}
               hazardAhead={hazardAhead && { type: hazardAhead.report.type, distance: hazardAhead.distance }}
-              sharingLive={canShare && shareLive}
+              sharingWith={tripHasViewers && (shareLive || shareWith.length > 0) ? tripViewersText : null}
               onAddStop={addStop}
               onSendEta={sendEta}
               onEnd={endTrip}
@@ -915,9 +996,9 @@ export default function App() {
               theme={theme}
               leaving={accountView.leaving ? leaveStyle : null}
               onSaveName={(name) => {
-                setProfile({ ...profile, name });
-                if (family.inFamily) void family.update({ name }).catch(() => {});
-                showToast(`Saved! Family sees you as ${name}`);
+                setProfile({ name });
+                void groups.update({ name }).catch(() => {});
+                showToast(`Saved! Your groups see you as ${name}`);
               }}
               onToggleTheme={toggleTheme}
               lang={lang}
@@ -925,13 +1006,8 @@ export default function App() {
               onTestVoice={(l) => speak(PHRASES.test[l], l, { repeat: true })}
               onFeedback={() => go('feedback')}
               onPrivacy={() => go('privacy')}
-              onLogout={() => {
-                backTo(0);
-                // Logged out, so family stop seeing this phone.
-                void family.leave();
-                setProfile(null);
-                setPhase('login');
-              }}
+              onLogout={logOut}
+              onDelete={deleteAccount}
               onBack={back}
             />
           )}
@@ -940,12 +1016,38 @@ export default function App() {
             <PrivacyScreen leaving={privacyView.leaving ? leaveStyle : null} onBack={back} />
           )}
 
-          {familyView.mounted && (
-            <FamilyScreen
-              profile={profile}
-              family={family}
+          {groupsView.mounted && (
+            <GroupsScreen
+              groups={groups}
+              leaving={groupsView.leaving ? leaveStyle : null}
+              onOpen={openGroup}
+              onNew={() => go('newgroup')}
+              onToast={showToast}
+              onBack={back}
+            />
+          )}
+
+          {newGroupView.mounted && (
+            <NewGroupScreen
+              groups={groups}
+              name={profile.name}
+              leaving={newGroupView.leaving ? leaveStyle : null}
+              onDone={(made, name) => {
+                setProfile({ name });
+                setGroupId(made.id);
+                showToast(`${made.name} started! Now invite people`);
+                swapTop('group');
+              }}
+              onBack={back}
+            />
+          )}
+
+          {groupView.mounted && group && (
+            <GroupScreen
+              group={group}
+              groups={groups}
               myArea={myArea?.name ?? null}
-              leaving={familyView.leaving ? leaveStyle : null}
+              leaving={groupView.leaving ? leaveStyle : null}
               onShowMember={showMember}
               onToast={showToast}
               onBack={back}
@@ -1000,12 +1102,12 @@ export default function App() {
       {phase === 'join' && inviteCode && (
         <JoinScreen
           code={inviteCode}
-          family={family}
+          groups={groups}
           name={profile?.name ?? null}
           onDone={(name) => {
             setInviteCode(null);
             hasInvite.current = false;
-            if (name) setProfile(profile ? { ...profile, name } : { name, phone: '' });
+            if (name) setProfile({ name });
             setPhase(name || profile ? 'app' : 'login');
           }}
         />

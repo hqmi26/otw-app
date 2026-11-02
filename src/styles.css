@@ -1835,6 +1835,80 @@ a.primary-btn {
   min-height: 52px;
 }
 
+.share-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.share-groups-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.share-group {
+  min-height: 40px;
+  padding: 0 14px;
+  border-radius: 999px;
+  background: var(--fill);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.share-group.is-on {
+  background: var(--accent);
+  color: #fff;
+}
+
+.member-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.member-row .row {
+  flex: 1;
+  min-width: 0;
+}
+
+.member-row .text-btn {
+  flex-shrink: 0;
+  min-height: 44px;
+}
+
+.group-choices {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.group-choice {
+  width: 100%;
+  padding: 14px;
+  border: 2px solid transparent;
+  border-radius: 16px;
+  background: var(--surface);
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  text-align: left;
+}
+
+.group-choice.is-on {
+  border-color: var(--accent);
+  background: var(--sel-bg);
+}
+
+.group-choice:disabled {
+  opacity: 0.6;
+}
+
+.login-skip {
+  min-height: 44px;
+  margin-top: 8px;
+}
+
 .chip-family {
   display: inline-flex;
   align-items: center;

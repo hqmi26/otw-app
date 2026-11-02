@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { APP_VERSION, initials, type Profile } from '../lib/models';
+import { APP_VERSION, initials, shownName, type Profile } from '../lib/models';
 import type { Lang } from '../lib/instructions';
 import type { Theme } from '../hooks/useTheme';
 import { BackIcon, ChatIcon, LockIcon, MoonIcon, SoundIcon } from './icons';
@@ -16,12 +16,8 @@ interface Props {
   onFeedback: () => void;
   onPrivacy: () => void;
   onLogout: () => void;
+  onDelete: () => void;
   onBack: () => void;
-}
-
-function maskPhone(digits: string) {
-  // Family who joined from an invite link only gave a name.
-  return digits ? `+60 ••• •••• ${digits.slice(-4)}` : 'Joined with a family invite';
 }
 
 /** Account (design screen 7). */
@@ -41,14 +37,14 @@ export default function AccountScreen(p: Props) {
 
       <div className="page-body">
         <div className="card profile-card">
-          <span className="avatar big">{initials(p.profile.name)}</span>
+          <span className="avatar big">{initials(shownName(p.profile))}</span>
           <span className="row-text">
-            <span className="profile-name">{p.profile.name}</span>
-            <span className="row-sub">{maskPhone(p.profile.phone)}</span>
+            <span className="profile-name">{shownName(p.profile)}</span>
+            <span className="row-sub">Guest account on this phone</span>
           </span>
         </div>
 
-        <h2 className="section-label">Username</h2>
+        <h2 className="section-label">Your name</h2>
         <form
           className="card stack"
           onSubmit={(e) => {
@@ -57,7 +53,7 @@ export default function AccountScreen(p: Props) {
           }}
         >
           <label className="field-label" htmlFor="acc-name">
-            Name your family sees
+            Name your groups see
           </label>
           <div className="inline-field">
             <input
@@ -74,7 +70,7 @@ export default function AccountScreen(p: Props) {
               Save
             </button>
           </div>
-          <span className="field-hint">Shows on the map and in Family. Max 20 letters.</span>
+          <span className="field-hint">Shows on the map and in your groups. Max 20 letters.</span>
         </form>
 
         <h2 className="section-label">Appearance</h2>
@@ -174,6 +170,9 @@ export default function AccountScreen(p: Props) {
 
         <button type="button" className="logout-btn" onClick={p.onLogout}>
           Log out
+        </button>
+        <button type="button" className="text-btn danger center" onClick={p.onDelete}>
+          Delete account
         </button>
       </div>
     </div>

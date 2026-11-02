@@ -2,12 +2,16 @@ import { areaNames, type AreaNames } from './api';
 import { distance, formatClock, type LngLat } from './geo';
 
 /**
- * Family sharing, talking to the OTW server (functions/api/family). Family see
- * each other's area, like Likas, never the exact spot: the phone rounds the
- * spot to about 1 km before anything is sent.
+ * Accounts and groups, talking to the OTW server (functions/api/account). A
+ * family group sees each other's area, like Likas, never the exact spot: the
+ * phone rounds the spot to about 1 km before anything is sent. A normal group
+ * sees nothing until you share a trip with it.
  */
 
-export const MAX_FAMILY = 10;
+export const MAX_PEOPLE = 10;
+export const MAX_NORMAL_GROUPS = 5;
+
+export type GroupType = 'family' | 'normal';
 
 export interface Area {
   name: string;
@@ -15,7 +19,7 @@ export interface Area {
   lng: number;
 }
 
-export interface FamilyMember {
+export interface GroupMember {
   id: string;
   name: string;
   private: boolean;
@@ -28,30 +32,56 @@ export interface FamilyMember {
   live: { lat: number; lng: number; heading: number | null; at: number | null } | null;
 }
 
-export interface FamilyState {
-  /** Your own member id. */
-  me: string;
+export interface Group {
+  id: string;
+  type: GroupType;
+  name: string;
+  /** Who started it, or took over when they left. Can remove people. */
+  ownerId: string;
   invite: { code: string; expiresAt: number } | null;
-  members: FamilyMember[];
+  members: GroupMember[];
 }
 
-export interface FamilyPatch {
+export interface GroupsState {
+  /** Your own hidden ID. */
+  me: string;
+  /** Hidden from every group. */
+  private: boolean;
+  /** Family group first. */
+  groups: Group[];
+}
+
+export interface StatusPatch {
   name?: string;
   private?: boolean;
   area?: Area | null;
   trip?: { to: string; eta: number } | null;
+  /** Normal groups this trip is shared with. Sent with the trip. */
+  shareWith?: string[];
   live?: { lat: number; lng: number; heading: number | null } | null;
 }
 
+export interface NewGroup {
+  type: GroupType;
+  /** Your name in the group. */
+  name: string;
+  /** Normal groups only; a family group is just Family. */
+  groupName?: string;
+}
+
 export interface InvitePreview {
+  type: GroupType;
+  groupName: string;
   /** Who's already in, oldest first. */
   names: string[];
   full: boolean;
-  /** This phone is already in that family. */
+  /** This phone is already in that group. */
   alreadyIn: boolean;
+  /** Joining this family means leaving the one this phone is in. */
+  leavesFamily: boolean;
 }
 
-export class FamilyError extends Error {
+export class AccountError extends Error {
   constructor(
     readonly status: number,
     message: string,
@@ -66,35 +96,40 @@ async function call<T>(path: string, token: string | null, body?: object): Promi
   if (token) headers.authorization = `Bearer ${token}`;
   let res: Response;
   try {
-    res = await fetch(`/api/family/${path}`, {
+    res = await fetch(`/api/account/${path}`, {
       method: body ? 'POST' : 'GET',
       headers,
       body: body ? JSON.stringify(body) : undefined,
     });
   } catch {
-    throw new FamilyError(0, 'No internet. Check your connection and try again.');
+    throw new AccountError(0, 'No internet. Check your connection and try again.');
   }
   const data = (await res.json().catch(() => ({}))) as { error?: string };
-  if (!res.ok) throw new FamilyError(res.status, data.error ?? 'Something went wrong. Try again.');
+  if (!res.ok) throw new AccountError(res.status, data.error ?? 'Something went wrong. Try again.');
   return data as T;
 }
 
-type Joined = { token: string; family: FamilyState };
-
-export const familyApi = {
-  start: (name: string, token: string | null) => call<Joined>('start', token, { name }),
+export const accountApi = {
+  guest: () => call<{ token: string }>('guest', null, {}),
+  state: (token: string) => call<GroupsState>('state', token),
+  update: (token: string, patch: StatusPatch) => call<GroupsState>('me', token, patch),
+  logout: (token: string) => call<{ ok: true }>('logout', token, {}),
+  deleteAccount: (token: string) => call<{ ok: true }>('delete', token, {}),
+  start: (token: string, group: NewGroup) => call<GroupsState>('groups', token, group),
   invite: (code: string, token: string | null) => call<InvitePreview>(`invite/${encodeURIComponent(code)}`, token),
-  join: (code: string, name: string, token: string | null) => call<Joined>('join', token, { code, name }),
-  state: (token: string) => call<FamilyState>('state', token),
-  update: (token: string, patch: FamilyPatch) => call<FamilyState>('me', token, patch),
-  newLink: (token: string) => call<FamilyState>('new-link', token, {}),
-  leave: (token: string) => call<{ ok: true }>('leave', token, {}),
+  join: (token: string, code: string, name: string) => call<GroupsState>('join', token, { code, name }),
+  newLink: (token: string, groupId: string) => call<GroupsState>(`groups/${groupId}/new-link`, token, {}),
+  leave: (token: string, groupId: string) => call<GroupsState>(`groups/${groupId}/leave`, token, {}),
+  remove: (token: string, groupId: string, userId: string) =>
+    call<GroupsState>(`groups/${groupId}/remove`, token, { userId }),
 };
 
 export const inviteLink = (code: string) => `${window.location.origin}/join/${code}`;
 
-export const inviteMessage = (code: string) =>
-  `Jom join family kita dalam OTW, senang tengok ETA masing-masing. Tekan link ni: ${inviteLink(code)}`;
+export const inviteMessage = (group: Group, code: string) =>
+  group.type === 'family'
+    ? `Jom join family kita dalam OTW, senang tengok ETA masing-masing. Tekan link ni: ${inviteLink(code)}`
+    : `Jom join group ${group.name} dalam OTW. Tekan link ni: ${inviteLink(code)}`;
 
 /** The code from an invite link's address, e.g. /join/K7M2Q9. */
 export function inviteCodeFromPath(path: string): string | null {
@@ -103,14 +138,33 @@ export function inviteCodeFromPath(path: string): string | null {
 }
 
 /**
- * Colours for family on the map and in lists, by the order they joined, so
+ * Everyone you can see, once each and without you: all of your family group,
+ * then anyone in a normal group who's sharing a trip with it.
+ */
+export function peopleInView(state: GroupsState): GroupMember[] {
+  const seen = new Map<string, GroupMember>();
+  for (const group of state.groups) {
+    for (const m of group.members) {
+      if (m.id === state.me) continue;
+      const known = seen.get(m.id);
+      if (group.type === 'family' || m.trip) {
+        if (!known || (m.trip && !known.trip)) seen.set(m.id, m);
+      }
+    }
+  }
+  return [...seen.values()];
+}
+
+/**
+ * Colours for people on the map and in lists, by the order they joined, so
  * Mak has the same colour on every phone. You always see yourself in OTW green.
  */
 const COLORS = ['#1D4ED8', '#B4436C', '#B45309', '#7C3AED', '#0369A1', '#BE123C', '#4D7C0F', '#A16207', '#9333EA', '#0F766E'];
 
-export function memberColor(state: FamilyState, id: string): string | undefined {
+export function memberColor(state: GroupsState, id: string): string | undefined {
   if (id === state.me) return undefined;
-  return COLORS[Math.max(0, state.members.findIndex((m) => m.id === id)) % COLORS.length];
+  const group = state.groups.find((g) => g.members.some((m) => m.id === id));
+  return COLORS[Math.max(0, group?.members.findIndex((m) => m.id === id) ?? 0) % COLORS.length];
 }
 
 function ago(seconds: number): string {
@@ -126,12 +180,13 @@ function ago(seconds: number): string {
 const clock = (unix: number) => formatClock(new Date(unix * 1000));
 
 /** The line under someone's name, e.g. "Likas · since 4:10 PM". */
-export function memberLine(m: FamilyMember, nowS = Date.now() / 1000): string {
+export function memberLine(m: GroupMember, type: GroupType = 'family', nowS = Date.now() / 1000): string {
   if (m.private) return 'Private · hidden from family';
   if (m.trip) {
     const eta = `ETA ${clock(m.trip.eta)}`;
     return m.live ? `To ${m.trip.to} · ${eta}` : `${m.area ? `${m.area.name} · ` : ''}to ${m.trip.to}, ${eta}`;
   }
+  if (type === 'normal') return 'Not sharing a trip right now';
   if (!m.area) return 'Hasn’t shared an area yet';
   // Only shares while OTW is open, so say how old the area is once it's been a while.
   if (m.seenAt != null && nowS - m.seenAt > 30 * 60) return `${m.area.name} · ${ago(nowS - m.seenAt)}`;

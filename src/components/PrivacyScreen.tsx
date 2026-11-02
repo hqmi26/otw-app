@@ -16,6 +16,11 @@ interface Flow {
 // Keep this in step with the code: every service the app talks to is listed here.
 const FLOWS: Flow[] = [
   {
+    icon: <LockIcon size={20} />,
+    title: 'Your account',
+    text: 'Each phone gets a random hidden ID on OTW’s server, so the app can tell accounts apart. It has no name, email or phone number, and it’s never used to record where you go. There are no ads.',
+  },
+  {
     icon: <CarIcon size={20} />,
     title: 'Directions',
     text: 'Your start, stop and destination go to the free Valhalla route service (Germany), or to OSRM (Germany) if Valhalla is busy, to work out the route.',
@@ -32,8 +37,13 @@ const FLOWS: Flow[] = [
   },
   {
     icon: <UsersIcon size={20} />,
-    title: 'Family',
-    text: 'Only if you join a family: your area (e.g. Likas), and where you’re driving to with the arrival time. To name your area, a spot rounded to about 1 km goes to Photon (Germany). Your exact spot only while “Share live trip” is on. Switch on Private to hide it all, and nothing is looked up. No history is kept.',
+    title: 'Family groups',
+    text: 'Only if you join one: your name, your area (e.g. Likas), and where you’re driving to with the arrival time. To name your area, a spot rounded to about 1 km goes to Photon (Germany). Your exact spot only while “Share live trip” is on. Switch on Private to hide it all, and nothing is looked up. No history is kept.',
+  },
+  {
+    icon: <UsersIcon size={20} />,
+    title: 'Normal groups',
+    text: 'Only if you join one: your name. They see nothing else until you share a trip with them before pressing Start. Then they see where you’re driving to and the arrival time, and your exact spot only while “Share live trip” is on. It stops when you arrive.',
   },
   {
     icon: <AlertIcon size={20} />,
@@ -54,6 +64,11 @@ const FLOWS: Flow[] = [
     icon: <ChartIcon size={20} />,
     title: 'Usage count',
     text: 'Once a day, “OTW was opened”, and “a trip started” for each trip, with only the phone type (Android or iPhone). No name, location or ID, so nobody can be told apart.',
+  },
+  {
+    icon: <AlertIcon size={20} />,
+    title: 'Deleting your account',
+    text: 'Account → Delete account erases your account, your place in your groups, and everything OTW keeps on this phone, including saved places. Cloudflare’s automatic backups can hold old copies for up to 30 days, then they’re gone. Road reports you sent stay until they run out, with no link to you.',
   },
 ];
 
@@ -76,8 +91,10 @@ export default function PrivacyScreen(p: Props) {
           <h2 className="card-title">Your trips are yours</h2>
           <ul className="privacy-points">
             <li>No ads. OTW doesn’t sell your data or track you.</li>
-            <li>Your name, phone number, saved places and searches stay on this phone.</li>
+            <li>Your saved places and searches stay on this phone.</li>
+            <li>Your name stays here too, unless you join a group or send feedback.</li>
             <li>Family see the area you’re in, never your exact spot, unless you switch on “Share live trip”.</li>
+            <li>Normal groups see nothing until you share a trip with them.</li>
           </ul>
         </div>
 
