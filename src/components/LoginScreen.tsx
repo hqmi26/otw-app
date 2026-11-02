@@ -56,7 +56,7 @@ export default function LoginScreen({ onDone }: { onDone: (profile: Profile) => 
       </button>
 
       <p className="login-note">
-        For now your account is saved on this phone only. OTP verification comes with family sharing.
+        OTW is in public testing. Your name and number stay on this phone.
       </p>
     </form>
   );

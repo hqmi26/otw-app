@@ -1,12 +1,20 @@
 import type { Place } from '../lib/api';
+import { memberColor, memberLine, type FamilyMember } from '../lib/family';
 import { distance, formatDistance, type LngLat } from '../lib/geo';
 import { initials, type Profile, type SavedPlace } from '../lib/models';
+import type { Family } from '../hooks/useFamily';
 import BottomSheet from './BottomSheet';
 import { SavedIcon } from './brand';
-import { AlertIcon, ChatIcon, ClockIcon, LocateIcon, PlusIcon, SearchIcon } from './icons';
+import { AlertIcon, ChatIcon, ClockIcon, LocateIcon, LockIcon, PlusIcon, SearchIcon } from './icons';
+
+/** Family rows that show with the sheet half open; the rest are below. */
+const PEEK_ROWS = 3;
 
 interface Props {
   profile: Profile;
+  family: Family;
+  /** The area this phone is in, e.g. Likas. */
+  myArea: string | null;
   position: LngLat | null;
   /** A line about location to show under the saved places, e.g. GPS lost, or demo mode. */
   locationNote: string | null;
@@ -19,12 +27,75 @@ interface Props {
   onRecenter: () => void;
   onReport: () => void;
   onFamily: () => void;
+  /** Show someone's area or car on the map. */
+  onShowMember: (member: FamilyMember) => void;
   onFeedback: () => void;
 }
 
 /** Home map (design screen 1). */
 export default function HomeScreen(p: Props) {
   const recents = p.recents.filter((r) => !p.saved.some((s) => s.place.id === r.id)).slice(0, 5);
+  const state = p.family.state;
+  const me = p.family.me;
+  const others = state ? state.members.filter((m) => m.id !== state.me) : [];
+
+  const youRow = (
+    <button type="button" className="row" onClick={p.onFamily}>
+      <span className="avatar" style={me?.private ? { background: 'var(--muted)' } : undefined}>
+        {me?.private ? <LockIcon size={16} /> : initials(p.profile.name)}
+      </span>
+      <span className="row-text">
+        <span className="row-title">{p.profile.name} (you)</span>
+        <span className="row-sub">
+          {me?.private
+            ? 'Private · hidden from family'
+            : me && p.myArea
+              ? `Family see: ${p.myArea}`
+              : p.position
+                ? 'Location on'
+                : 'Location is off'}
+        </span>
+      </span>
+    </button>
+  );
+
+  const memberRow = (m: FamilyMember) => (
+    <button
+      type="button"
+      key={m.id}
+      className="row"
+      onClick={() => (!m.private && (m.live || m.area) ? p.onShowMember(m) : p.onFamily())}
+    >
+      {m.private ? (
+        <span className="avatar is-private">
+          <LockIcon size={16} />
+        </span>
+      ) : (
+        <span className="avatar" style={{ background: state ? memberColor(state, m.id) : undefined }}>
+          {initials(m.name)}
+        </span>
+      )}
+      <span className="row-text">
+        <span className="row-title family-name">
+          {m.name}
+          {m.live && <span className="badge live-badge">LIVE</span>}
+        </span>
+        <span className="row-sub">{memberLine(m)}</span>
+      </span>
+    </button>
+  );
+
+  const inviteRow = (
+    <button type="button" className="row" onClick={p.onFamily}>
+      <span className="avatar is-invite">
+        <PlusIcon size={20} />
+      </span>
+      <span className="row-text">
+        <span className="row-title">Invite your family</span>
+        <span className="row-sub">See their area and ETA, never the exact spot</span>
+      </span>
+    </button>
+  );
 
   return (
     <>
@@ -81,23 +152,13 @@ export default function HomeScreen(p: Props) {
         }
       >
         <div className="list compact" data-peek>
-          <button type="button" className="row" onClick={p.onFamily}>
-            <span className="avatar">{initials(p.profile.name)}</span>
-            <span className="row-text">
-              <span className="row-title">{p.profile.name} (you)</span>
-              <span className="row-sub">{p.position ? 'Location on' : 'Location is off'}</span>
-            </span>
-          </button>
-          <button type="button" className="row" onClick={p.onFamily}>
-            <span className="avatar is-invite">
-              <PlusIcon size={20} />
-            </span>
-            <span className="row-text">
-              <span className="row-title">Invite your family</span>
-              <span className="row-sub">See Mak, Ayah and Adik on the map</span>
-            </span>
-          </button>
+          {others.slice(0, PEEK_ROWS - 1).map(memberRow)}
+          {youRow}
+          {others.length === 0 && inviteRow}
         </div>
+        {others.length > PEEK_ROWS - 1 && (
+          <div className="list compact">{others.slice(PEEK_ROWS - 1).map(memberRow)}</div>
+        )}
 
         {recents.length > 0 && (
           <>

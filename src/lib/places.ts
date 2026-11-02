@@ -1,0 +1,530 @@
+import type { FeatureCollection, MultiPolygon, Point, Polygon } from 'geojson';
+import type { Place } from './api';
+import { distance, formatDistance, snapToLine, type LngLat } from './geo';
+
+/*
+ * Sabah's places, searched on the phone itself. public/places/sabah.json is
+ * rebuilt every month from Overture Maps and OpenStreetMap by
+ * scripts/build_places.py. Matches show straight away, and once the list has
+ * loaded they work with a weak signal too (search.ts also asks Photon, for
+ * places in other states).
+ */
+
+/** Which search chip a place belongs to ('' = none). */
+export type PlaceGroup = 'surau' | 'food' | 'fuel' | 'parking' | 'shop' | 'area' | 'street' | '';
+
+interface PlaceFile {
+  region: string;
+  release: string;
+  bbox: [west: number, south: number, east: number, north: number];
+  border: Polygon | MultiPolygon;
+  credit: string;
+  cats: [label: string, group: PlaceGroup][];
+  subtitles: string[];
+  /** Coordinates are × 100 000; sub is an index into subtitles, or -1. */
+  places: [name: string, cat: number, lon: number, lat: number, sub: number][];
+}
+
+export interface PlacesIndex {
+  file: PlaceFile;
+  /** Every word in the file, sorted, so words starting with what's typed sit together. */
+  vocab: string[];
+  vocabId: Map<string, number>;
+  /** Place → its word ids: wordIds[wordStart[i] .. wordStart[i + 1]). */
+  wordStart: Int32Array;
+  wordIds: Int32Array;
+  /** Word → places containing it. */
+  postStart: Int32Array;
+  posts: Int32Array;
+  /** Subtitle ("Taman Indah Permai, Telipok") → its word ids, and word → subtitles. */
+  subWords: Int32Array[];
+  subsByWord: Map<number, number[]>;
+  /** Subtitle → places that have it. */
+  placesBySub: number[][];
+  /** Words of each kind of place ("Dental clinic"), and kind → places. */
+  catWords: Set<string>[];
+  placesByCat: number[][];
+  /** Each name's words in one spelling, filled in as searches need them. */
+  wholeName: (string | undefined)[];
+  byGroup: Map<PlaceGroup, number[]>;
+}
+
+/** A search hit from the Sabah list or the user's own places. */
+export interface Hit {
+  place: Place;
+  score: number;
+}
+
+/** Short forms people type, mapped to the words used in place names (both are changed the same way). */
+const SHORT: Record<string, string[]> = {
+  jln: ['jalan'],
+  jl: ['jalan'],
+  lrg: ['lorong'],
+  lor: ['lorong'],
+  tmn: ['taman'],
+  kg: ['kampung'],
+  kpg: ['kampung'],
+  kampong: ['kampung'],
+  sg: ['sungai'],
+  bkt: ['bukit'],
+  bdr: ['bandar'],
+  sri: ['seri'],
+  hosp: ['hospital'],
+  kk: ['kota', 'kinabalu'],
+  qe: ['queen', 'elizabeth'],
+  sk: ['sekolah', 'kebangsaan'],
+  smk: ['sekolah', 'menengah', 'kebangsaan'],
+  sjk: ['sekolah', 'jenis', 'kebangsaan'],
+  kv: ['kolej', 'vokasional'],
+  mcd: ['mcdonalds'],
+  mekdi: ['mcdonalds'],
+};
+/**
+ * Words that mean the same thing. A place is findable by any of them: "clinic" finds
+ * "Klinik Seri Telipok", "mount kinabalu" finds "Gunung Kinabalu" and, through the
+ * kind of place, "klinik gigi" finds a dentist listed as "Dental clinic".
+ */
+const SAME = [
+  'klinik clinic', 'restoran restaurant', 'kafe cafe', 'farmasi pharmacy', 'sekolah school', 'masjid mosque',
+  'gereja church', 'pasar market', 'polis police', 'stesen station', 'bomba fire', 'gigi dental dentist',
+  'pantai beach', 'pulau island', 'gunung mount mountain mt', 'bukit hill', 'sungai river', 'tasik lake',
+  'pejabat office', 'kedai shop store', 'runcit grocery', 'dobi laundry laundromat', 'bengkel workshop automotive',
+  'tayar tire tyre', 'kereta car', 'cuci wash', 'minyak petrol gas fuel', 'penginapan lodging', 'terbang airport',
+  'muzium museum', 'perpustakaan library', 'universiti university', 'kolej college', 'politeknik polytechnic',
+  'imigresen immigration', 'pos post', 'salun salon', 'gunting barber', 'emas jewelry gold', 'makan food eatery',
+  'kopi coffee',
+].map((group) => group.split(' '));
+const ALIAS = new Map(SAME.flatMap((group) => group.map((w) => [w, group] as const)));
+/** One spelling per meaning, to compare a whole name with what's typed. */
+const canon = (w: string) => ALIAS.get(w)?.[0] ?? w;
+/** "Al-Amin" is also findable as "alamin". */
+const ARTICLES = new Set(['al', 'ar', 'as', 'an', 'at', 'ad', 'asy', 'ash', 'az']);
+/**
+ * Words people add that the place's own name may leave out: "surau TAMAN indah permai",
+ * "KEDAI tayar", "BALAI polis".
+ */
+const OPTIONAL = new Set([
+  'taman', 'kampung', 'jalan', 'lorong', 'lapangan', 'kedai', 'balai', 'di', 'dekat', 'kat', 'near', 'the', 'of',
+]);
+/** Shown first when the same score: areas, then places, then streets. */
+const GROUP_BONUS: Partial<Record<PlaceGroup, number>> = { area: 0.8, street: 0 };
+
+const ASCII = /^[\x00-\x7f]*$/;
+
+export function words(text: string): string[] {
+  // Most names are plain ASCII; skipping the accent step for them makes indexing ~2× faster.
+  const plain = ASCII.test(text) ? text : text.normalize('NFKD').replace(/[\u0300-\u036f]/g, '');
+  const out: string[] = [];
+  // "McDonald's" is one word, "mcdonalds".
+  for (const w of plain.toLowerCase().replace(/['’`]/g, '').split(/[^a-z0-9]+/)) {
+    if (!w) continue;
+    const short = SHORT[w];
+    if (short) out.push(...short);
+    else out.push(w);
+  }
+  return out;
+}
+
+function nameWords(name: string): string[] {
+  const w = words(name);
+  const out = new Set(w.flatMap((x) => ALIAS.get(x) ?? [x]));
+  for (let i = 0; i < w.length - 1; i++) if (ARTICLES.has(w[i])) out.add(w[i] + w[i + 1]);
+  return [...out];
+}
+
+/** True if a and b differ by at most one letter added, dropped or changed. */
+function oneEditApart(a: string, b: string): boolean {
+  if (Math.abs(a.length - b.length) > 1) return false;
+  let i = 0;
+  while (i < a.length && i < b.length && a[i] === b[i]) i++;
+  if (a.length === b.length) return a.slice(i + 1) === b.slice(i + 1);
+  return a.length > b.length ? a.slice(i + 1) === b.slice(i) : a.slice(i) === b.slice(i + 1);
+}
+
+/** First index in the sorted list whose word is >= w. */
+function lowerBound(list: string[], w: string): number {
+  let lo = 0;
+  let hi = list.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (list[mid] < w) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
+export function buildIndex(file: PlaceFile): PlacesIndex {
+  const rows = file.places;
+  const perPlace = rows.map((r) => nameWords(r[0]));
+  const perSub = file.subtitles.map((s) => [...new Set(words(s))]);
+  const all = new Set<string>();
+  for (const list of [...perPlace, ...perSub]) for (const w of list) all.add(w);
+  const vocab = [...all].sort();
+  const vocabId = new Map(vocab.map((w, i) => [w, i]));
+
+  const wordStart = new Int32Array(rows.length + 1);
+  for (let i = 0; i < rows.length; i++) wordStart[i + 1] = wordStart[i] + perPlace[i].length;
+  const wordIds = new Int32Array(wordStart[rows.length]);
+  const counts = new Int32Array(vocab.length);
+  perPlace.forEach((list, i) =>
+    list.forEach((w, j) => {
+      const id = vocabId.get(w)!;
+      wordIds[wordStart[i] + j] = id;
+      counts[id]++;
+    }),
+  );
+  const postStart = new Int32Array(vocab.length + 1);
+  for (let w = 0; w < vocab.length; w++) postStart[w + 1] = postStart[w] + counts[w];
+  const posts = new Int32Array(postStart[vocab.length]);
+  const fill = postStart.slice(0, vocab.length);
+  for (let i = 0; i < rows.length; i++) {
+    for (let k = wordStart[i]; k < wordStart[i + 1]; k++) posts[fill[wordIds[k]]++] = i;
+  }
+
+  const pushTo = <K>(map: Map<K, number[]>, key: K, value: number) => {
+    const list = map.get(key);
+    if (list) list.push(value);
+    else map.set(key, [value]);
+  };
+  const subWords = perSub.map((list) => Int32Array.from(list, (w) => vocabId.get(w)!));
+  const subsByWord = new Map<number, number[]>();
+  subWords.forEach((ids, s) => ids.forEach((id) => pushTo(subsByWord, id, s)));
+  const placesBySub: number[][] = file.subtitles.map(() => []);
+  const catWords = file.cats.map(([label]) => new Set(nameWords(label)));
+  const placesByCat: number[][] = file.cats.map(() => []);
+  const byGroup = new Map<PlaceGroup, number[]>();
+  rows.forEach(([, cat, , , sub], i) => {
+    if (sub >= 0) placesBySub[sub].push(i);
+    placesByCat[cat].push(i);
+    pushTo(byGroup, file.cats[cat][1], i);
+  });
+  return {
+    file,
+    vocab,
+    vocabId,
+    wordStart,
+    wordIds,
+    postStart,
+    posts,
+    subWords,
+    subsByWord,
+    placesBySub,
+    catWords,
+    placesByCat,
+    wholeName: new Array<string | undefined>(rows.length),
+    byGroup,
+  };
+}
+
+let loading: Promise<PlacesIndex | null> | null = null;
+
+/** Downloads and indexes the Sabah list once; null if it can't be fetched (try again later). */
+export function loadPlaces(): Promise<PlacesIndex | null> {
+  loading ??= fetch(`${import.meta.env.BASE_URL}places/sabah.json`)
+    .then((r) => (r.ok ? (r.json() as Promise<PlaceFile>) : null))
+    .then((file) => (file ? buildIndex(file) : null))
+    .catch(() => null)
+    .then((ix) => {
+      if (!ix) loading = null;
+      return ix;
+    });
+  return loading;
+}
+
+function inRing(ring: number[][], [x, y]: LngLat): boolean {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [xi, yi] = ring[i];
+    const [xj, yj] = ring[j];
+    if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+
+/** Is this spot covered by the list (inside Sabah)? */
+export function covers(ix: PlacesIndex, coord: LngLat): boolean {
+  const [w, s, e, n] = ix.file.bbox;
+  if (coord[0] < w || coord[0] > e || coord[1] < s || coord[1] > n) return false;
+  const polys = ix.file.border.type === 'Polygon' ? [ix.file.border.coordinates] : ix.file.border.coordinates;
+  return polys.some(([outer, ...holes]) => inRing(outer, coord) && !holes.some((h) => inRing(h, coord)));
+}
+
+export function toPlace(ix: PlacesIndex, i: number): Place {
+  const [name, cat, x, y, sub] = ix.file.places[i];
+  const area = sub >= 0 ? ix.file.subtitles[sub] : '';
+  return {
+    id: `l:${x},${y}:${name}`,
+    name,
+    subtitle: [ix.file.cats[cat][0], area].filter(Boolean).join(' · '),
+    coord: [x / 1e5, y / 1e5],
+  };
+}
+
+function groupOf(ix: PlacesIndex, i: number): PlaceGroup {
+  return ix.file.cats[ix.file.places[i][1]][1];
+}
+
+/** How far away counts against a hit: 1 km ≈ −0.45, 10 km ≈ −1.6, 100 km ≈ −3. */
+function distancePenalty(near: LngLat | null, coord: LngLat): number {
+  return near ? 1.5 * Math.log10(1 + distance(near, coord) / 1000) : 0;
+}
+
+/** For each typed word: matching word ids and their weights (3 whole word, 2 start of word, 1.5 one letter off). */
+function wordMatches(ix: PlacesIndex, q: string): Map<number, number> {
+  const found = new Map<number, number>();
+  const exact = ix.vocabId.get(q);
+  if (exact != null) found.set(exact, 3);
+  if (q.length >= 2) {
+    for (let i = lowerBound(ix.vocab, q); i < ix.vocab.length && ix.vocab[i].startsWith(q); i++) {
+      if (!found.has(i)) found.set(i, 2);
+    }
+  }
+  // Spelling slips: "munawarah" for "munawwarah", also while still typing the word. Not for a
+  // short word that's already found as typed: "polis" shouldn't also find "Politeknik".
+  if (q.length >= 7 || (q.length >= 4 && found.size === 0)) {
+    const end = lowerBound(ix.vocab, q[0] + '￿');
+    for (let i = lowerBound(ix.vocab, q[0]); i < end; i++) {
+      if (found.has(i)) continue;
+      const w = ix.vocab[i];
+      if (oneEditApart(q, w)) found.set(i, 1.5);
+      else if (w.length > q.length && [q.length - 1, q.length, q.length + 1].some((n) => oneEditApart(q, w.slice(0, n)))) {
+        found.set(i, 1.2);
+      }
+    }
+  }
+  return found;
+}
+
+/** Kinds of place a typed word fits: "police" → "Police station", "gigi" → "Dental clinic". */
+function catMatches(ix: PlacesIndex, q: string): Set<number> {
+  const found = new Set<number>();
+  ix.catWords.forEach((list, c) => {
+    for (const w of list) {
+      if (w === q || (q.length >= 3 && w.startsWith(q))) {
+        found.add(c);
+        return;
+      }
+    }
+  });
+  return found;
+}
+
+/** Text search over the Sabah list. */
+export function searchIndex(ix: PlacesIndex, query: string, near: LngLat | null, limit = 8): Hit[] {
+  const qs = [...new Set(words(query))];
+  if (qs.length === 0) return [];
+  const matches = qs.map((q) => wordMatches(ix, q));
+  // Subtitles that match a typed word (whole word or start of a word only).
+  const subMatches = matches.map((m) => {
+    const subs = new Set<number>();
+    for (const [id, weight] of m) if (weight >= 2) ix.subsByWord.get(id)?.forEach((s) => subs.add(s));
+    return subs;
+  });
+  const kinds = qs.map((q) => catMatches(ix, q));
+  const required = qs.map((q) => !OPTIONAL.has(q));
+  if (!required.some(Boolean)) required.fill(true);
+
+  // Start from the typed word that matches the fewest places, then check the rest.
+  let seed = -1;
+  let seedSize = Infinity;
+  matches.forEach((m, k) => {
+    if (!required[k]) return;
+    let size = 0;
+    for (const id of m.keys()) size += ix.postStart[id + 1] - ix.postStart[id];
+    for (const s of subMatches[k]) size += ix.placesBySub[s].length;
+    for (const c of kinds[k]) size += ix.placesByCat[c].length;
+    if (size < seedSize) {
+      seed = k;
+      seedSize = size;
+    }
+  });
+  // "police station", "klinik gigi", "cafe": every word describes a kind of place,
+  // so the closest places of that kind come first, whatever they're called.
+  const kindOfAll = kinds
+    .filter((_, k) => required[k])
+    .reduce((all, next) => new Set([...all].filter((c) => next.has(c))));
+  const candidates = new Set<number>();
+  for (const id of matches[seed].keys()) {
+    for (let p = ix.postStart[id]; p < ix.postStart[id + 1]; p++) candidates.add(ix.posts[p]);
+  }
+  for (const s of subMatches[seed]) ix.placesBySub[s].forEach((i) => candidates.add(i));
+  for (const c of kinds[seed]) ix.placesByCat[c].forEach((i) => candidates.add(i));
+
+  const whole = qs.map(canon).join(' ');
+  const hits: { i: number; score: number }[] = [];
+  for (const i of candidates) {
+    const [, cat, x, y] = ix.file.places[i];
+    const bonus = (GROUP_BONUS[groupOf(ix, i)] ?? 0.4) - distancePenalty(near, [x / 1e5, y / 1e5]);
+    if (kindOfAll.has(cat)) {
+      hits.push({ i, score: 3 * qs.length + bonus });
+      continue;
+    }
+    let score = 0;
+    let inName = 0;
+    let inKind = 0;
+    let ok = true;
+    for (let k = 0; k < qs.length && ok; k++) {
+      let best = 0;
+      for (let w = ix.wordStart[i]; w < ix.wordStart[i + 1]; w++) best = Math.max(best, matches[k].get(ix.wordIds[w]) ?? 0);
+      if (best > 0) {
+        score += best;
+        inName++;
+      } else if (kinds[k].has(ix.file.places[i][1])) {
+        score += 1;
+        inKind++;
+      } else if (subMatches[k].has(ix.file.places[i][4])) {
+        score += 1;
+      } else if (required[k]) {
+        ok = false;
+      }
+    }
+    // The area alone isn't a hit: "telipok" shouldn't list every shop in Telipok.
+    if (!ok || inName + inKind === 0) continue;
+    const name = (ix.wholeName[i] ??= words(ix.file.places[i][0]).map(canon).join(' '));
+    if (name === whole) score += 2.5;
+    else if (name.startsWith(whole)) score += 1.5;
+    hits.push({ i, score: score + bonus });
+  }
+  if (hits.length === 0 && qs.length > 1) {
+    // "mcd telipok" and no McDonald's listed in Telipok: the closest McDonald's instead.
+    const rest = qs.filter((_, k) => subMatches[k].size === 0 || kinds[k].size > 0);
+    if (rest.length > 0 && rest.length < qs.length) return searchIndex(ix, rest.join(' '), near, limit);
+  }
+  // Ties keep the file's order, which puts Overture's most confident places first.
+  hits.sort((a, b) => b.score - a.score || a.i - b.i);
+  return dedupe(hits.slice(0, limit * 3).map((h) => ({ place: toPlace(ix, h.i), score: h.score }))).slice(0, limit);
+}
+
+/** The closest places of one kind, for the Petrol / Food / Surau / Parking chips. */
+export function nearbyInGroup(ix: PlacesIndex, group: PlaceGroup, near: LngLat | null, limit = 10): Hit[] {
+  const list = ix.byGroup.get(group) ?? [];
+  if (!near) return list.slice(0, limit).map((i) => ({ place: toPlace(ix, i), score: 0 }));
+  return list
+    .map((i) => {
+      const [, , x, y] = ix.file.places[i];
+      return { i, d: distance(near, [x / 1e5, y / 1e5]) };
+    })
+    .sort((a, b) => a.d - b.d)
+    .slice(0, limit)
+    .map(({ i, d }) => ({ place: toPlace(ix, i), score: -d }));
+}
+
+/** The part of a route still ahead, for "Petrol on the way". */
+export interface RouteAhead {
+  coords: LngLat[];
+  /** cumulative() of coords. */
+  cum: number[];
+  /** Metres of the route already driven (0 before the trip starts). */
+  from: number;
+}
+
+/** A place this far from the road counts as on the way (a short turn off). */
+const ON_THE_WAY_M = 300;
+/** Closer than this, two places of the same kind are taken to be one. */
+const SAME_PLACE_M = 80;
+
+/**
+ * Places of one kind along the road still ahead, in the order you reach them,
+ * e.g. the petrol stations on the way. The subtitle says how far ahead.
+ */
+export function alongRoute(ix: PlacesIndex, group: PlaceGroup, route: RouteAhead, limit = 10): Hit[] {
+  // A quick box around the route first, so only nearby places are measured properly.
+  let [west, south, east, north] = [Infinity, Infinity, -Infinity, -Infinity];
+  for (const [x, y] of route.coords) {
+    west = Math.min(west, x);
+    east = Math.max(east, x);
+    south = Math.min(south, y);
+    north = Math.max(north, y);
+  }
+  const pad = 0.004; // ~400 m
+  const found: { i: number; along: number; p: LngLat }[] = [];
+  for (const i of ix.byGroup.get(group) ?? []) {
+    const [, , x, y] = ix.file.places[i];
+    const p: LngLat = [x / 1e5, y / 1e5];
+    if (p[0] < west - pad || p[0] > east + pad || p[1] < south - pad || p[1] > north + pad) continue;
+    const snap = snapToLine(p, route.coords, route.cum);
+    if (snap.offset <= ON_THE_WAY_M && snap.along > route.from + 50) found.push({ i, along: snap.along, p });
+  }
+  // One place can be listed several times under different names (the floating
+  // mosque has six); keep the one the list is surest of (lowest index).
+  const kept: typeof found = [];
+  for (const f of found.sort((a, b) => a.i - b.i)) {
+    if (!kept.some((k) => distance(k.p, f.p) < SAME_PLACE_M)) kept.push(f);
+  }
+  return kept
+    .sort((a, b) => a.along - b.along)
+    .slice(0, limit)
+    .map(({ i, along }) => {
+      const place = toPlace(ix, i);
+      const ahead = `${formatDistance(along - route.from)} ahead`;
+      return { place: { ...place, subtitle: place.subtitle ? `${ahead} · ${place.subtitle}` : ahead }, score: -along };
+    });
+}
+
+/** What's at a spot on the map: a place within ~40 m, else a street within ~120 m. */
+export function placeAt(ix: PlacesIndex, coord: LngLat): Place | null {
+  let best = -1;
+  let bestD = Infinity;
+  let street = -1;
+  let streetD = Infinity;
+  const rows = ix.file.places;
+  for (let i = 0; i < rows.length; i++) {
+    const dx = Math.abs(rows[i][2] / 1e5 - coord[0]);
+    const dy = Math.abs(rows[i][3] / 1e5 - coord[1]);
+    if (dx > 0.002 || dy > 0.002) continue; // quick skip: further than ~200 m
+    const d = distance(coord, [rows[i][2] / 1e5, rows[i][3] / 1e5]);
+    const group = groupOf(ix, i);
+    if (group === 'street') {
+      if (d < streetD) [street, streetD] = [i, d];
+    } else if (group !== 'area' && d < bestD) {
+      [best, bestD] = [i, d];
+    }
+  }
+  if (best >= 0 && bestD <= 40) return toPlace(ix, best);
+  if (street >= 0 && streetD <= 120) return toPlace(ix, street);
+  return null;
+}
+
+/** Same place twice (e.g. a long road in two pieces nearby): keep the better one. */
+export function dedupe(hits: Hit[]): Hit[] {
+  const seen = new Set<string>();
+  return hits.filter(({ place }) => {
+    const key = `${place.name.toLowerCase()}|${place.subtitle}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+/** Points for the map's place labels: everything except streets and areas. */
+export function mapFeatures(ix: PlacesIndex): FeatureCollection<Point> {
+  const features: FeatureCollection<Point>['features'] = [];
+  ix.file.places.forEach(([name, cat, x, y], i) => {
+    const group = ix.file.cats[cat][1];
+    if (group === 'street' || group === 'area') return;
+    features.push({
+      type: 'Feature',
+      properties: { name, group, i },
+      geometry: { type: 'Point', coordinates: [x / 1e5, y / 1e5] },
+    });
+  });
+  return { type: 'FeatureCollection', features };
+}
+
+/** Score a short list directly (the user's own places), with the same weights as the index. */
+export function scoreName(name: string, query: string): number {
+  const qs = [...new Set(words(query))];
+  const own = nameWords(name);
+  let score = 0;
+  for (const q of qs) {
+    let best = 0;
+    for (const w of own) {
+      if (w === q) best = Math.max(best, 3);
+      else if (q.length >= 2 && w.startsWith(q)) best = Math.max(best, 2);
+      else if (q.length >= 4 && oneEditApart(q, w)) best = Math.max(best, 1.5);
+    }
+    if (best === 0 && !OPTIONAL.has(q)) return 0;
+    score += best;
+  }
+  return score;
+}

@@ -1,32 +1,31 @@
 import { useState } from 'react';
 import { APP_VERSION, initials, type Profile } from '../lib/models';
 import type { Lang } from '../lib/instructions';
-import type { Theme } from '../hooks/useTheme';
-import { BackIcon, ChatIcon, MoonIcon, SoundIcon } from './icons';
+import { BackIcon, ChatIcon, LockIcon, MoonIcon, SoundIcon } from './icons';
 
 interface Props {
   profile: Profile;
-  theme: Theme;
   lang: Lang;
   leaving: 'pop' | 'fade' | null;
   onSaveName: (name: string) => void;
-  onToggleTheme: () => void;
+  onCustomise: () => void;
   onLang: (lang: Lang) => void;
   onTestVoice: (lang: Lang) => void;
   onFeedback: () => void;
+  onPrivacy: () => void;
   onLogout: () => void;
   onBack: () => void;
 }
 
 function maskPhone(digits: string) {
-  return `+60 ••• •••• ${digits.slice(-4)}`;
+  // Family who joined from an invite link only gave a name.
+  return digits ? `+60 ••• •••• ${digits.slice(-4)}` : 'Joined with a family invite';
 }
 
 /** Account (design screen 7). */
 export default function AccountScreen(p: Props) {
   const [name, setName] = useState(p.profile.name);
   const clean = name.trim();
-  const dark = p.theme === 'dark';
 
   return (
     <div className={`screen screen-push page${p.leaving ? ` leave-${p.leaving}` : ''}`}>
@@ -76,25 +75,16 @@ export default function AccountScreen(p: Props) {
         </form>
 
         <h2 className="section-label">Appearance</h2>
-        <div className="card setting-row">
-          <span className="row-icon tinted">
-            <MoonIcon size={20} />
-          </span>
-          <span className="row-text">
-            <span id="acc-dark" className="row-title">
-              Dark mode
+        <div className="card list">
+          <button type="button" className="row" onClick={p.onCustomise}>
+            <span className="row-icon tinted">
+              <MoonIcon size={20} />
             </span>
-            <span className="row-sub">Easier on the eyes at night</span>
-          </span>
-          <button
-            type="button"
-            role="switch"
-            aria-checked={dark}
-            aria-labelledby="acc-dark"
-            className={`switch${dark ? ' is-on' : ''}`}
-            onClick={p.onToggleTheme}
-          >
-            <span className="switch-knob" />
+            <span className="row-text">
+              <span className="row-title">Customise</span>
+              <span className="row-sub">Dark mode, map style, 3D and your car</span>
+            </span>
+            <span className="row-meta">›</span>
           </button>
         </div>
 
@@ -152,6 +142,17 @@ export default function AccountScreen(p: Props) {
         </div>
 
         <h2 className="section-label">About</h2>
+        <div className="card list">
+          <button type="button" className="row" onClick={p.onPrivacy}>
+            <span className="row-icon tinted">
+              <LockIcon size={20} />
+            </span>
+            <span className="row-text">
+              <span className="row-title">Privacy &amp; data</span>
+              <span className="row-sub">What stays on your phone, and what doesn’t</span>
+            </span>
+          </button>
+        </div>
         <div className="card">
           <div className="info-row">
             <span>Version</span>

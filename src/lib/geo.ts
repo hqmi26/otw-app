@@ -4,6 +4,24 @@ export type LngLat = [number, number];
 const EARTH_RADIUS_M = 6371000;
 const toRad = (deg: number) => (deg * Math.PI) / 180;
 
+/** How far below the horizon the sun's centre is when it looks like it has set. */
+const SUNSET_ALTITUDE_DEG = -0.83;
+
+/** Whether the sun is down at this spot. Good to a few minutes, plenty for choosing a dark map. */
+export function sunIsDown(at: Date, [lng, lat]: LngLat): boolean {
+  const day = (at.getTime() - Date.UTC(at.getUTCFullYear(), 0, 0)) / 86_400_000;
+  const declination = toRad(-23.44) * Math.cos(toRad((360 / 365) * (day + 10)));
+  // The sun runs up to 16 minutes ahead of or behind the clock during the year.
+  const b = toRad((360 / 364) * (day - 81));
+  const clockOffsetMin = 9.87 * Math.sin(2 * b) - 7.53 * Math.cos(b) - 1.5 * Math.sin(b);
+  const solarHours = at.getUTCHours() + at.getUTCMinutes() / 60 + lng / 15 + clockOffsetMin / 60;
+  const hourAngle = toRad(15 * (solarHours - 12));
+  const latRad = toRad(lat);
+  const altitude =
+    Math.sin(latRad) * Math.sin(declination) + Math.cos(latRad) * Math.cos(declination) * Math.cos(hourAngle);
+  return altitude < Math.sin(toRad(SUNSET_ALTITUDE_DEG));
+}
+
 /** Great-circle distance in metres. */
 export function distance(a: LngLat, b: LngLat): number {
   const dLat = toRad(b[1] - a[1]);

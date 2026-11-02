@@ -2,6 +2,7 @@ import type { SavedKind, HazardType } from '../lib/models';
 import { arrowRotation } from '../lib/instructions';
 import {
   AlertIcon,
+  CameraIcon,
   CarIcon,
   FlagIcon,
   FloodIcon,
@@ -72,6 +73,8 @@ export function HazardIcon({ type, size = 26 }: { type: HazardType; size?: numbe
       return <RoadblockIcon size={size} />;
     case 'pothole':
       return <PotholeIcon size={size} />;
+    case 'camera':
+      return <CameraIcon size={size} />;
     default:
       return <AlertIcon size={size} />;
   }

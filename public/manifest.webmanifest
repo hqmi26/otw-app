@@ -1,7 +1,7 @@
 {
   "name": "OTW – Aplikasi trip anda",
   "short_name": "OTW",
-  "description": "Navigation for the family.",
+  "description": "Navigation for drivers in Malaysia.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
