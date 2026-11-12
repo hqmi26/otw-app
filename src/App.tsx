@@ -50,12 +50,13 @@ import {
   type SavedKind,
   type SavedPlace,
 } from './lib/models';
-import { inviteCodeFromPath, memberColor, peopleInView, type Group, type GroupMember } from './lib/groups';
+import { accountApi, inviteCodeFromPath, memberColor, peopleInView, type Group, type GroupMember } from './lib/groups';
 import { speak, stopSpeaking } from './lib/voice';
 import { keepScreenOn, letScreenSleep } from './lib/keepAwake';
 import { countOpen, countTrip } from './lib/visits';
 import { useGeolocation } from './hooks/useGeolocation';
 import { useArea, useGroups, useGroupSharing } from './hooks/useGroups';
+import { usePlaceSync } from './hooks/usePlaceSync';
 import { useTheme } from './hooks/useTheme';
 import { useRecents } from './hooks/useRecents';
 import { useGeoStatus } from './hooks/useGeoStatus';
@@ -152,6 +153,24 @@ export default function App() {
   // How many phones use OTW: one anonymous count a day (Account → Privacy & data).
   useEffect(() => {
     if (phase === 'app') countOpen();
+  }, [phase]);
+  // Signed in: saved places and added places are kept with the account.
+  const placeSync = usePlaceSync(groups, saved, setSaved, myPlaces, setMyPlaces);
+  const signedIn = groups.state?.login.signedIn ?? false;
+  // The welcome screen offers sign-in to someone who used OTW before. Asked for there, not on every open.
+  const [welcomeClientId, setWelcomeClientId] = useState<string | null>(null);
+  useEffect(() => {
+    if (phase !== 'login') return;
+    let alive = true;
+    accountApi.config().then(
+      (c) => alive && setWelcomeClientId(c.googleClientId),
+      () => {
+        // No answer: the welcome screen just has no sign-in button.
+      },
+    );
+    return () => {
+      alive = false;
+    };
   }, [phase]);
   /** In a group and not on Private: what you choose to share can go out. */
   const canShare = (groups.state?.groups.length ?? 0) > 0 && !groups.state?.private;
@@ -811,14 +830,27 @@ export default function App() {
     }
   };
   const logOut = () => {
-    const warning =
-      'Log out? You’re a guest, so this account can’t come back: you’d leave your groups and need new invite links. Saved places stay on this phone.';
+    const warning = signedIn
+      ? 'Log out of this phone? Your account stays: sign in with Google to come back. Your saved places are kept with your account, and come off this phone.'
+      : 'Log out? You’re a guest, so this account can’t come back: you’d leave your groups and need new invite links. Saved places stay on this phone.';
     if (!window.confirm(warning)) return;
-    void closeAccount(groups.logout, 'Couldn’t log out. Check your internet and try again', () => {
+    const leave = async () => {
+      // Nothing changed on this phone is lost: it goes to the account first.
+      if (signedIn) await placeSync.flush();
+      await groups.logout();
+    };
+    void closeAccount(leave, 'Couldn’t log out. Check your internet and try again', () => {
+      if (signedIn) placeSync.forget();
       backTo(0);
       setProfile(null);
       setPhase('login');
     });
+  };
+  /** Google's answer after "Sign in with Google", from the Account page or the welcome screen. */
+  const signInWithGoogle = async (credential: string) => {
+    const result = await groups.signInWithGoogle(credential);
+    setProfile({ name: result.name ?? (profile?.name || result.googleName) ?? '' });
+    showToast(result.switched ? 'Welcome back! Your account is on this phone now' : 'Signed in. Your account is safe now');
   };
   const deleteAccount = () => {
     const warning =
@@ -1029,6 +1061,11 @@ export default function App() {
           {accountView.mounted && (
             <AccountScreen
               profile={profile}
+              login={groups.state?.login ?? null}
+              googleClientId={groups.state?.googleClientId ?? null}
+              dark={theme === 'dark'}
+              getGoogleNonce={groups.nonceForGoogle}
+              onGoogle={signInWithGoogle}
               leaving={accountView.leaving ? leaveStyle : null}
               onSaveName={(name) => {
                 setProfile({ name });
@@ -1171,6 +1208,19 @@ export default function App() {
             setProfile(p);
             setPhase('app');
           }}
+          google={
+            welcomeClientId
+              ? {
+                  clientId: welcomeClientId,
+                  dark: theme === 'dark',
+                  getNonce: groups.nonceForGoogle,
+                  onCredential: async (credential) => {
+                    await signInWithGoogle(credential);
+                    setPhase('app');
+                  },
+                }
+              : null
+          }
         />
       )}
 

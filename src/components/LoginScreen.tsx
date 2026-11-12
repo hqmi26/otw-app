@@ -1,9 +1,21 @@
 import { useState, type FormEvent } from 'react';
 import type { Profile } from '../lib/models';
 import { OtwWordmark } from './brand';
+import GoogleSignIn from './GoogleSignIn';
+
+interface Props {
+  onDone: (profile: Profile) => void;
+  /** Sign-in for someone who used OTW before. Null hides it (not set up, or no answer from the server). */
+  google: {
+    clientId: string;
+    dark: boolean;
+    getNonce: () => Promise<string>;
+    onCredential: (credential: string) => Promise<void>;
+  } | null;
+}
 
 /** First-time welcome (design screen 0b). No sign-up: the name can wait until you join a group. */
-export default function LoginScreen({ onDone }: { onDone: (profile: Profile) => void }) {
+export default function LoginScreen({ onDone, google }: Props) {
   const [name, setName] = useState('');
   const clean = name.trim();
   const valid = clean.length >= 2;
@@ -40,6 +52,13 @@ export default function LoginScreen({ onDone }: { onDone: (profile: Profile) => 
       <button type="button" className="text-btn center login-skip" onClick={() => onDone({ name: '' })}>
         Skip for now
       </button>
+
+      {google && (
+        <div className="login-google">
+          <span className="field-label">Used OTW before?</span>
+          <GoogleSignIn {...google} />
+        </div>
+      )}
 
       <p className="login-note">OTW is in public testing. You’ll drive as a guest: no phone number and no password.</p>
     </form>

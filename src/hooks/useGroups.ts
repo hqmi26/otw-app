@@ -3,6 +3,7 @@ import {
   accountApi,
   AccountError,
   areaAt,
+  googleNonce,
   type Area,
   type GroupsState,
   type NewGroup,
@@ -10,6 +11,18 @@ import {
 } from '../lib/groups';
 import { distance, type LngLat } from '../lib/geo';
 import { useStored } from './useStored';
+
+// The public test kept this phone's key under an older name. It's the same key,
+// and it's what carries a tester's family over to their account.
+try {
+  const old = localStorage.getItem('otw-family-token');
+  if (old) {
+    if (!localStorage.getItem('otw-token')) localStorage.setItem('otw-token', old);
+    localStorage.removeItem('otw-family-token');
+  }
+} catch {
+  // Storage is blocked, so there was no key to carry over.
+}
 
 /** How often the groups refresh: quicker while someone's car is moving. */
 const POLL_MS = 30000;
@@ -122,6 +135,17 @@ export function useGroups(enabled: boolean) {
     [guard],
   );
 
+  /** Google's signed answer goes to the server, which ties it to this account or moves this phone to the one it belongs to. */
+  const signInWithGoogle = useCallback(
+    async (credential: string) => {
+      const result = await guard((t) => accountApi.google(t, credential));
+      setState(result.state);
+      return result;
+    },
+    [guard],
+  );
+  const nonceForGoogle = useCallback(async () => googleNonce(await ensureToken()), [ensureToken]);
+
   /** Tells the server, then forgets this phone's key. Throws if the server can't be reached. */
   const finish = useCallback(
     async (call: (token: string) => Promise<unknown>) => {
@@ -147,6 +171,9 @@ export function useGroups(enabled: boolean) {
       family,
       loadError,
       ensureToken,
+      withToken: guard,
+      signInWithGoogle,
+      nonceForGoogle,
       refresh,
       start,
       join,
@@ -157,7 +184,7 @@ export function useGroups(enabled: boolean) {
       logout,
       deleteAccount,
     }),
-    [token, state, family, loadError, ensureToken, refresh, start, join, update, newLink, leave, remove, logout, deleteAccount],
+    [token, state, family, loadError, ensureToken, guard, signInWithGoogle, nonceForGoogle, refresh, start, join, update, newLink, leave, remove, logout, deleteAccount],
   );
 }
 

@@ -5,7 +5,11 @@
 -- A name, area and trip only arrive once someone is in a group, and no history is kept:
 -- each person's status row is overwritten, and the trip and live-car fields are cleared on arrival.
 --
--- The older tables "families" and "members" are no longer used and can be dropped.
+-- Signing in with Google fills in google_id and email, and only then are saved places
+-- kept here (user_places), so they come back on a new phone.
+--
+-- The public test's tables "families" and "members" are moved into these once, by
+-- functions/api/account, and left empty. They can be dropped after that.
 --
 -- Times are unix seconds (UTC).
 
@@ -63,6 +67,15 @@ CREATE TABLE IF NOT EXISTS user_status (
   live_lng REAL,
   live_heading REAL,
   live_at INTEGER
+);
+
+-- Saved places and added places of a signed-in account: one row, replaced as a whole.
+CREATE TABLE IF NOT EXISTS user_places (
+  user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  version INTEGER NOT NULL,            -- goes up with every change, so two phones can't overwrite each other unseen
+  saved TEXT NOT NULL,                 -- JSON list, as the app keeps it
+  my_places TEXT NOT NULL,             -- JSON list of places added with "Add a missing place"
+  updated_at INTEGER NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS devices_by_user ON devices (user_id);

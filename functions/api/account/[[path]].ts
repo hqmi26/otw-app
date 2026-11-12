@@ -13,7 +13,12 @@
  * row that is overwritten, and trips are cleared on arrival.
  *
  * Joining is by invite link with just a name.
+ *
+ * Signing in with Google ties the hidden ID to a Google account, so it can be
+ * got back on a new phone. Only then are the email address and saved places kept here.
  */
+
+import { verifyGoogleToken } from '../../../server/google';
 
 // Just the parts of Cloudflare's D1 API used here, so no extra type package is needed.
 interface D1Statement {
@@ -29,6 +34,10 @@ interface D1Database {
 
 interface Env {
   FAMILY_DB?: D1Database;
+  /** OTW's client ID from the Google Cloud console. Not a secret. Without it there's no Google button. */
+  GOOGLE_CLIENT_ID?: string;
+  /** Tests only: another place to fetch Google's signing keys from. */
+  GOOGLE_CERTS_URL?: string;
 }
 
 interface Context {
@@ -87,6 +96,10 @@ const LIVE_STALE_S = 3 * 60;
 const TRIP_STALE_S = 30 * 60;
 /** New hidden IDs each phone (by IP, kept only in memory) can ask for a minute. */
 const GUESTS_PER_MINUTE = 20;
+/** The most saved places and added places kept with an account, and their size as text. */
+const MAX_SAVED = 50;
+const MAX_MY_PLACES = 200;
+const MAX_PLACES_CHARS = 100_000;
 /** No 0/O or 1/I, so the code is easy to read out. */
 const CODE_LETTERS = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 
@@ -106,10 +119,59 @@ const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS user_status (user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
     seen_at INTEGER, private INTEGER NOT NULL DEFAULT 0, area TEXT, area_lat REAL, area_lng REAL, area_since INTEGER,
     trip_to TEXT, trip_eta INTEGER, live_lat REAL, live_lng REAL, live_heading REAL, live_at INTEGER)`,
+  `CREATE TABLE IF NOT EXISTS user_places (user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    version INTEGER NOT NULL, saved TEXT NOT NULL, my_places TEXT NOT NULL, updated_at INTEGER NOT NULL)`,
   `CREATE INDEX IF NOT EXISTS devices_by_user ON devices (user_id)`,
   `CREATE INDEX IF NOT EXISTS group_members_by_user ON group_members (user_id)`,
 ];
 let tablesReady: Promise<unknown> | null = null;
+
+/**
+ * The public test kept families in two older tables, families and members.
+ * This moves them over in one go (all of it or none of it): each family becomes
+ * a family group with the same invite link, and each phone's key keeps working,
+ * so nobody has to join again. The old rows go in the same step, so it can
+ * never run twice and bring back someone who has since deleted their account.
+ */
+const MOVE_OLD_FAMILIES = [
+  `INSERT OR IGNORE INTO users (id, name, created_at) SELECT id, name, joined_at FROM members`,
+  `INSERT OR IGNORE INTO devices (token_hash, user_id, created_at) SELECT token_hash, id, joined_at FROM members`,
+  // Whoever joined first can remove people. An invite code already taken here gets a new one.
+  `INSERT OR IGNORE INTO groups (id, type, name, owner_id, invite_code, invite_expires_at, created_at)
+    SELECT f.id, 'family', 'Family',
+      (SELECT m.id FROM members m WHERE m.family_id = f.id ORDER BY m.joined_at, m.rowid LIMIT 1),
+      CASE WHEN EXISTS (SELECT 1 FROM groups g WHERE g.invite_code = f.invite_code)
+        THEN hex(randomblob(4)) ELSE f.invite_code END,
+      f.invite_expires_at, f.created_at
+    FROM families f WHERE EXISTS (SELECT 1 FROM members m WHERE m.family_id = f.id)`,
+  `INSERT OR IGNORE INTO group_members (group_id, user_id, joined_at)
+    SELECT family_id, id, joined_at FROM members WHERE family_id IN (SELECT id FROM groups)`,
+  `INSERT OR IGNORE INTO user_status (user_id, seen_at, private, area, area_lat, area_lng, area_since,
+      trip_to, trip_eta, live_lat, live_lng, live_heading, live_at)
+    SELECT id, seen_at, private, area, area_lat, area_lng, area_since,
+      trip_to, trip_eta, live_lat, live_lng, live_heading, live_at FROM members`,
+  `DELETE FROM members`,
+  `DELETE FROM families`,
+];
+
+async function moveOldFamilies(db: D1Database) {
+  const old = await db
+    .prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name IN ('families', 'members')")
+    .first<{ n: number }>();
+  if (old?.n !== 2) return;
+  if (!(await db.prepare('SELECT 1 AS yes FROM families LIMIT 1').first())) return;
+  await db.batch(MOVE_OLD_FAMILIES.map((sql) => db.prepare(sql)));
+}
+
+/**
+ * A preview link (something.otw-app-eoz.pages.dev) may share the live database.
+ * Moving families from there would pull them out from under the live app, so
+ * only the live address and a local test server do it.
+ */
+function mayMoveOldFamilies(request: Request): boolean {
+  const host = new URL(request.url).hostname;
+  return !(host.endsWith('.pages.dev') && host.split('.').length > 3);
+}
 
 class HttpError extends Error {
   constructor(
@@ -244,7 +306,8 @@ async function forgetUnneeded(db: D1Database, userId: string) {
   if (types.length === 0) {
     await db.batch([
       db.prepare('DELETE FROM user_status WHERE user_id = ?').bind(userId),
-      db.prepare('UPDATE users SET name = NULL WHERE id = ?').bind(userId),
+      // A signed-in account keeps its name, to bring it back on a new phone.
+      db.prepare('UPDATE users SET name = NULL WHERE id = ? AND google_id IS NULL AND email IS NULL').bind(userId),
     ]);
   } else if (!types.includes('family')) {
     await db
@@ -269,7 +332,7 @@ const IN_MY_GROUPS = `user_id IN (SELECT o.user_id FROM group_members o
   JOIN group_members m ON m.group_id = o.group_id WHERE m.user_id = ?)`;
 
 /** Everything the Groups pages show. Clears cars and trips that have gone stale first. */
-async function stateFor(db: D1Database, me: UserRow) {
+async function stateFor(db: D1Database, me: UserRow, env: Env) {
   const t = now();
   await db.batch([
     db.prepare(`UPDATE user_status SET ${CLEAR_LIVE} WHERE live_at < ? AND ${IN_MY_GROUPS}`).bind(t - LIVE_STALE_S, me.id),
@@ -294,7 +357,13 @@ async function stateFor(db: D1Database, me: UserRow) {
     )
     .bind(me.id)
     .all<MemberRow>();
-  const status = await db.prepare('SELECT private FROM user_status WHERE user_id = ?').bind(me.id).first<{ private: number }>();
+  const mine = await db
+    .prepare(
+      `SELECT u.google_id, u.email, s.private, p.version FROM users u
+        LEFT JOIN user_status s ON s.user_id = u.id LEFT JOIN user_places p ON p.user_id = u.id WHERE u.id = ?`,
+    )
+    .bind(me.id)
+    .first<{ google_id: string | null; email: string | null; private: number | null; version: number | null }>();
 
   const memberView = (m: MemberRow, type: GroupType) => {
     const hidden = m.private === 1;
@@ -320,7 +389,12 @@ async function stateFor(db: D1Database, me: UserRow) {
 
   return {
     me: me.id,
-    private: status?.private === 1,
+    private: mine?.private === 1,
+    // Signed in means the account can be got back on another phone.
+    login: { signedIn: mine?.google_id != null || mine?.email != null, email: mine?.email ?? null },
+    googleClientId: env.GOOGLE_CLIENT_ID ?? null,
+    // Goes up each time the saved places kept with the account change.
+    placesVersion: mine?.version ?? 0,
     groups: groups.map((g) => ({
       id: g.id,
       type: g.type,
@@ -460,11 +534,73 @@ async function newInvite(db: D1Database, groupId: string) {
     .run();
 }
 
+/**
+ * This phone signed in to an account that already exists: the phone moves to
+ * that account. A guest who was only ever this phone is folded into it, with
+ * its groups where they fit (one family, a few normal groups), and then erased.
+ */
+async function signInto(db: D1Database, tokenHash: string, guest: UserRow, account: UserRow) {
+  await db.prepare('UPDATE devices SET user_id = ? WHERE token_hash = ?').bind(account.id, tokenHash).run();
+  // A guest with another phone, or its own sign-in, carries on without this phone.
+  const other = await db.prepare('SELECT 1 AS yes FROM devices WHERE user_id = ? LIMIT 1').bind(guest.id).first();
+  if (other || guest.google_id || guest.email) return;
+
+  const groupsOf = async (userId: string) =>
+    (
+      await db
+        .prepare('SELECT g.id, g.type FROM group_members m JOIN groups g ON g.id = m.group_id WHERE m.user_id = ?')
+        .bind(userId)
+        .all<{ id: string; type: GroupType }>()
+    ).results;
+  const theirs = await groupsOf(account.id);
+  const already = new Set(theirs.map((g) => g.id));
+  let hasFamily = theirs.some((g) => g.type === 'family');
+  let normal = theirs.filter((g) => g.type === 'normal').length;
+  for (const g of await groupsOf(guest.id)) {
+    const fits = !already.has(g.id) && (g.type === 'family' ? !hasFamily : normal < MAX_NORMAL);
+    if (!fits) continue;
+    await db.batch([
+      db.prepare('UPDATE group_members SET user_id = ?, sharing = 0 WHERE group_id = ? AND user_id = ?').bind(account.id, g.id, guest.id),
+      db.prepare('UPDATE groups SET owner_id = ? WHERE id = ? AND owner_id = ?').bind(account.id, g.id, guest.id),
+    ]);
+    if (g.type === 'family') hasFamily = true;
+    else normal++;
+  }
+  if (!account.name && guest.name) {
+    await db.prepare('UPDATE users SET name = ? WHERE id = ?').bind(guest.name, account.id).run();
+  }
+  // Leaves the groups that didn't fit, handing them on properly.
+  await deleteUser(db, guest.id);
+}
+
+interface PlacesRow {
+  version: number;
+  saved: string;
+  my_places: string;
+}
+
+function placesView(row: PlacesRow | null) {
+  const list = (textJson: string | undefined): unknown[] => {
+    try {
+      const data: unknown = JSON.parse(textJson ?? '[]');
+      return Array.isArray(data) ? data : [];
+    } catch {
+      return [];
+    }
+  };
+  return { version: row?.version ?? 0, saved: list(row?.saved), myPlaces: list(row?.my_places) };
+}
+
 const FULL_MESSAGE = `This group already has ${MAX_PEOPLE} people`;
 const TOO_MANY_GROUPS = `You can be in ${MAX_NORMAL} normal groups at most`;
 
-async function handle(db: D1Database, method: string, path: string[], request: Request): Promise<Response> {
+async function handle(db: D1Database, env: Env, method: string, path: string[], request: Request): Promise<Response> {
   const [action, arg, sub] = path;
+
+  // What the welcome screen needs before this phone has a key.
+  if (method === 'GET' && action === 'config') {
+    return reply(200, { googleClientId: env.GOOGLE_CLIENT_ID ?? null });
+  }
 
   // A new driver: a hidden ID and this phone's key. Nothing about the person.
   if (method === 'POST' && action === 'guest') {
@@ -506,12 +642,12 @@ async function handle(db: D1Database, method: string, path: string[], request: R
   const me = await requireUser(db, request);
 
   if (method === 'GET' && action === 'state') {
-    return reply(200, await stateFor(db, me));
+    return reply(200, await stateFor(db, me, env));
   }
 
   if (method === 'POST' && action === 'me') {
     await updateMe(db, me, await readJson(request));
-    return reply(200, await stateFor(db, me));
+    return reply(200, await stateFor(db, me, env));
   }
 
   // Signs this phone out. With no other phone and no linked login there'd be
@@ -526,6 +662,70 @@ async function handle(db: D1Database, method: string, path: string[], request: R
   if (method === 'POST' && action === 'delete') {
     await deleteUser(db, me.id);
     return reply(200, { ok: true });
+  }
+
+  // Sign in with Google: ties this account to a Google account, or, if that
+  // Google account already has an OTW account, moves this phone over to it.
+  if (method === 'POST' && action === 'google') {
+    if (!env.GOOGLE_CLIENT_ID) throw new HttpError(503, 'Google sign-in is not set up');
+    const token = bearer(request)!;
+    const credential = text((await readJson(request)).credential, 4096);
+    const google = credential
+      ? await verifyGoogleToken(credential, {
+          clientId: env.GOOGLE_CLIENT_ID,
+          nonce: await sha256(`otw-google:${token}`),
+          certsUrl: env.GOOGLE_CERTS_URL,
+        })
+      : null;
+    // Not a 401: the key on this phone is fine, the answer from Google is what failed.
+    if (!google) throw new HttpError(400, 'Google sign-in didn’t work. Try again.');
+
+    const account = await db.prepare('SELECT * FROM users WHERE google_id = ?').bind(google.sub).first<UserRow>();
+    let user = me;
+    if (account && account.id !== me.id) {
+      await signInto(db, await sha256(token), me, account);
+      user = (await db.prepare('SELECT * FROM users WHERE id = ?').bind(account.id).first<UserRow>()) ?? account;
+    } else if (!account) {
+      if (me.google_id) throw new HttpError(409, 'This account uses another Google account. Log out first.');
+      await db.prepare('UPDATE users SET google_id = ? WHERE id = ?').bind(google.sub, me.id).run();
+    }
+    // For showing which Google account this is. Skipped if another account has the address.
+    if (google.email) await db.prepare('UPDATE OR IGNORE users SET email = ? WHERE id = ?').bind(google.email, user.id).run();
+    return reply(200, {
+      // True when this phone moved to an account that was already there.
+      switched: user.id !== me.id,
+      name: user.name ?? null,
+      googleName: google.name,
+      state: await stateFor(db, user, env),
+    });
+  }
+
+  // Saved places and added places, kept with a signed-in account so they
+  // come back on a new phone. A guest keeps them on the phone only.
+  if (action === 'places' && (method === 'GET' || method === 'POST')) {
+    if (!me.google_id && !me.email) throw new HttpError(403, 'Sign in to keep places with your account');
+    const row = await db.prepare('SELECT version, saved, my_places FROM user_places WHERE user_id = ?').bind(me.id).first<PlacesRow>();
+    if (method === 'GET') return reply(200, placesView(row));
+
+    const data = await readJson(request);
+    const { saved, myPlaces } = data;
+    if (!Array.isArray(saved) || !Array.isArray(myPlaces)) throw new HttpError(400, 'Missing places');
+    if (saved.length > MAX_SAVED || myPlaces.length > MAX_MY_PLACES) throw new HttpError(413, 'Too many places');
+    const savedText = JSON.stringify(saved);
+    const myPlacesText = JSON.stringify(myPlaces);
+    if (savedText.length + myPlacesText.length > MAX_PLACES_CHARS) throw new HttpError(413, 'Too many places');
+    // Another phone changed them since this one last looked: it gets the newer list back to join with its own.
+    const current = row?.version ?? 0;
+    if (data.base !== current) return reply(409, placesView(row));
+    await db
+      .prepare(
+        `INSERT INTO user_places (user_id, version, saved, my_places, updated_at) VALUES (?, ?, ?, ?, ?)
+          ON CONFLICT (user_id) DO UPDATE SET version = excluded.version, saved = excluded.saved,
+          my_places = excluded.my_places, updated_at = excluded.updated_at`,
+      )
+      .bind(me.id, current + 1, savedText, myPlacesText, now())
+      .run();
+    return reply(200, { version: current + 1 });
   }
 
   // Start a new group, with this person as the first member and its owner.
@@ -550,7 +750,7 @@ async function handle(db: D1Database, method: string, path: string[], request: R
       db.prepare('INSERT INTO group_members (group_id, user_id, joined_at) VALUES (?, ?, ?)').bind(groupId, me.id, now()),
       db.prepare('UPDATE users SET name = ? WHERE id = ?').bind(name, me.id),
     ]);
-    return reply(201, await stateFor(db, me));
+    return reply(201, await stateFor(db, me, env));
   }
 
   // Join with the invite link and a name. A new family replaces the old one.
@@ -585,19 +785,19 @@ async function handle(db: D1Database, method: string, path: string[], request: R
         .run();
     }
     await db.prepare('UPDATE users SET name = ? WHERE id = ?').bind(name, me.id).run();
-    return reply(200, await stateFor(db, me));
+    return reply(200, await stateFor(db, me, env));
   }
 
   if (method === 'POST' && action === 'groups' && arg) {
     const group = await myGroup(db, me, arg);
     if (sub === 'new-link') {
       await newInvite(db, group.id);
-      return reply(200, await stateFor(db, me));
+      return reply(200, await stateFor(db, me, env));
     }
     if (sub === 'leave') {
       await dropMember(db, group.id, me.id);
       await forgetUnneeded(db, me.id);
-      return reply(200, await stateFor(db, me));
+      return reply(200, await stateFor(db, me, env));
     }
     if (sub === 'remove') {
       if (group.owner_id !== me.id) throw new HttpError(403, 'Only the person who started the group can remove people');
@@ -607,7 +807,7 @@ async function handle(db: D1Database, method: string, path: string[], request: R
       await forgetUnneeded(db, userId);
       // A new link, so the old one can't bring them straight back in.
       await newInvite(db, group.id);
-      return reply(200, await stateFor(db, me));
+      return reply(200, await stateFor(db, me, env));
     }
   }
   throw new HttpError(404, 'Not found');
@@ -618,9 +818,10 @@ export const onRequest = async ({ request, env, params }: Context) => {
   if (!db) return reply(503, { error: 'Accounts are not set up' });
   const path = Array.isArray(params.path) ? params.path : params.path ? [params.path] : [];
   try {
-    tablesReady ??= db.batch(SCHEMA.map((sql) => db.prepare(sql)));
+    const move = mayMoveOldFamilies(request);
+    tablesReady ??= db.batch(SCHEMA.map((sql) => db.prepare(sql))).then(() => (move ? moveOldFamilies(db) : undefined));
     await tablesReady;
-    return await handle(db, request.method, path, request);
+    return await handle(db, env, request.method, path, request);
   } catch (e) {
     if (e instanceof HttpError) return reply(e.status, { error: e.message });
     tablesReady = null; // try making the tables again next time

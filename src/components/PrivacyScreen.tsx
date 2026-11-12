@@ -21,6 +21,11 @@ const FLOWS: Flow[] = [
     text: 'Each phone gets a random hidden ID on OTW’s server, so the app can tell accounts apart. It has no name, email or phone number, and it’s never used to record where you go. There are no ads.',
   },
   {
+    icon: <LockIcon size={20} />,
+    title: 'Signing in with Google',
+    text: 'Only if you choose to. Google’s button is fetched from Google when you tap “Sign in with Google”, not before. Google tells OTW your email address and its ID for your account, and OTW keeps those so you can get your account back on a new phone. From then on your saved places and the places you added, home address included, are kept on OTW’s server with your account. Logging out takes them off this phone only.',
+  },
+  {
     icon: <CarIcon size={20} />,
     title: 'Directions',
     text: 'Your start, stop and destination go through OTW’s server to GrabMaps on Amazon (Malaysia), to work out the route. If that’s busy, they go to the free Valhalla or OSRM services (Germany) instead.',
@@ -68,7 +73,7 @@ const FLOWS: Flow[] = [
   {
     icon: <AlertIcon size={20} />,
     title: 'Deleting your account',
-    text: 'Account → Delete account erases your account, your place in your groups, and everything OTW keeps on this phone, including saved places. Cloudflare’s automatic backups can hold old copies for up to 30 days, then they’re gone. Road reports you sent stay until they run out, with no link to you.',
+    text: 'Account → Delete account erases your account, your place in your groups, your email address and saved places on OTW’s server if you signed in, and everything OTW keeps on this phone, including saved places. Cloudflare’s automatic backups can hold old copies for up to 30 days, then they’re gone. Road reports you sent stay until they run out, with no link to you.',
   },
 ];
 
@@ -91,7 +96,7 @@ export default function PrivacyScreen(p: Props) {
           <h2 className="card-title">Your trips are yours</h2>
           <ul className="privacy-points">
             <li>No ads. OTW doesn’t sell your data or track you.</li>
-            <li>Your saved places and searches stay on this phone.</li>
+            <li>Your searches stay on this phone. So do your saved places, unless you sign in with Google.</li>
             <li>Your name stays here too, unless you join a group or send feedback.</li>
             <li>Family see the area you’re in, never your exact spot, unless you switch on “Share live trip”.</li>
             <li>Normal groups see nothing until you share a trip with them.</li>

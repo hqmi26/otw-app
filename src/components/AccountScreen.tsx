@@ -1,10 +1,18 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { APP_VERSION, initials, shownName, type Profile } from '../lib/models';
 import type { Lang } from '../lib/instructions';
 import { BackIcon, ChatIcon, LockIcon, MoonIcon, SoundIcon } from './icons';
+import GoogleSignIn from './GoogleSignIn';
 
 interface Props {
   profile: Profile;
+  /** Null until the server has answered. */
+  login: { signedIn: boolean; email: string | null } | null;
+  /** Null when Google sign-in isn't set up. */
+  googleClientId: string | null;
+  dark: boolean;
+  getGoogleNonce: () => Promise<string>;
+  onGoogle: (credential: string) => Promise<void>;
   lang: Lang;
   leaving: 'pop' | 'fade' | null;
   onSaveName: (name: string) => void;
@@ -21,6 +29,8 @@ interface Props {
 /** Account (design screen 7). */
 export default function AccountScreen(p: Props) {
   const [name, setName] = useState(p.profile.name);
+  // Signing in can bring a name with it.
+  useEffect(() => setName(p.profile.name), [p.profile.name]);
   const clean = name.trim();
 
   return (
@@ -37,9 +47,38 @@ export default function AccountScreen(p: Props) {
           <span className="avatar big">{initials(shownName(p.profile))}</span>
           <span className="row-text">
             <span className="profile-name">{shownName(p.profile)}</span>
-            <span className="row-sub">Guest account on this phone</span>
+            <span className="row-sub">
+              {p.login?.signedIn ? (p.login.email ?? 'Signed in with Google') : 'Guest account on this phone'}
+            </span>
           </span>
         </div>
+
+        {p.login?.signedIn && (
+          <p className="privacy-note">
+            <LockIcon size={18} />
+            Your groups and saved places are kept with this account. On a new phone, sign in with Google to get them
+            back.
+          </p>
+        )}
+
+        {p.login && !p.login.signedIn && p.googleClientId && (
+          <>
+            <h2 className="section-label">Keep your account</h2>
+            <div className="card stack">
+              <p className="card-text">
+                Right now your account lives only on this phone. Sign in with Google to get your groups and saved
+                places back on a new phone.
+              </p>
+              <GoogleSignIn
+                clientId={p.googleClientId}
+                dark={p.dark}
+                getNonce={p.getGoogleNonce}
+                onCredential={p.onGoogle}
+              />
+              <span className="field-hint">No password. OTW keeps only your email address from Google.</span>
+            </div>
+          </>
+        )}
 
         <h2 className="section-label">Your name</h2>
         <form

@@ -47,6 +47,12 @@ export interface GroupsState {
   me: string;
   /** Hidden from every group. */
   private: boolean;
+  /** Signed in (with Google) means the account can be got back on another phone. */
+  login: { signedIn: boolean; email: string | null };
+  /** Null when Google sign-in isn't set up on the server. */
+  googleClientId: string | null;
+  /** Goes up each time the places kept with the account change. */
+  placesVersion: number;
   /** Family group first. */
   groups: Group[];
 }
@@ -81,10 +87,29 @@ export interface InvitePreview {
   leavesFamily: boolean;
 }
 
+export interface GoogleResult {
+  /** This phone moved to an account that was already there. */
+  switched: boolean;
+  /** The name that account's groups see, if it has one. */
+  name: string | null;
+  /** First name from Google, as a starting point. Not kept on the server. */
+  googleName: string | null;
+  state: GroupsState;
+}
+
+/** Saved places and added places kept with a signed-in account. */
+export interface AccountPlaces {
+  version: number;
+  saved: unknown[];
+  myPlaces: unknown[];
+}
+
 export class AccountError extends Error {
   constructor(
     readonly status: number,
     message: string,
+    /** What else the server said, e.g. the newer places when a save came too late. */
+    readonly data?: unknown,
   ) {
     super(message);
   }
@@ -105,12 +130,18 @@ async function call<T>(path: string, token: string | null, body?: object): Promi
     throw new AccountError(0, 'No internet. Check your connection and try again.');
   }
   const data = (await res.json().catch(() => ({}))) as { error?: string };
-  if (!res.ok) throw new AccountError(res.status, data.error ?? 'Something went wrong. Try again.');
+  if (!res.ok) throw new AccountError(res.status, data.error ?? 'Something went wrong. Try again.', data);
   return data as T;
 }
 
 export const accountApi = {
+  config: () => call<{ googleClientId: string | null }>('config', null),
   guest: () => call<{ token: string }>('guest', null, {}),
+  google: (token: string, credential: string) => call<GoogleResult>('google', token, { credential }),
+  places: (token: string) => call<AccountPlaces>('places', token),
+  /** `base` is the version these were changed from; a 409 carries the newer ones. */
+  savePlaces: (token: string, base: number, saved: unknown[], myPlaces: unknown[]) =>
+    call<{ version: number }>('places', token, { base, saved, myPlaces }),
   state: (token: string) => call<GroupsState>('state', token),
   update: (token: string, patch: StatusPatch) => call<GroupsState>('me', token, patch),
   logout: (token: string) => call<{ ok: true }>('logout', token, {}),
@@ -123,6 +154,15 @@ export const accountApi = {
   remove: (token: string, groupId: string, userId: string) =>
     call<GroupsState>(`groups/${groupId}/remove`, token, { userId }),
 };
+
+/**
+ * What this phone asks Google to write into its answer. The server works out
+ * the same value from the phone's key, so a copied answer is no use elsewhere.
+ */
+export async function googleNonce(token: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`otw-google:${token}`));
+  return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
+}
 
 export const inviteLink = (code: string) => `${window.location.origin}/join/${code}`;
 

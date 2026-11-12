@@ -1623,6 +1623,10 @@ textarea.input {
   color: var(--text2);
 }
 
+.privacy-note svg {
+  flex-shrink: 0;
+}
+
 .privacy-note.is-error {
   background: var(--warn-bg);
   color: var(--warn-text);
@@ -2000,6 +2004,33 @@ a.primary-btn {
 .login-skip {
   min-height: 44px;
   margin-top: 8px;
+}
+
+.login-google {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.google-sign-in {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.google-slot {
+  display: flex;
+  justify-content: center;
+  min-height: 44px;
+  /* Google draws its button in a frame, which would otherwise pick its own light or dark. */
+  color-scheme: light;
+}
+
+.google-slot[hidden] {
+  display: none;
 }
 
 .chip-family {
