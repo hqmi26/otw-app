@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en" translate="no">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" content="notranslate" />
+    <title>KK traffic test</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --bg: #f4f6f3;
+        --surface: #ffffff;
+        --text: #15201d;
+        --muted: #5b6763;
+        --line: #e1e5e2;
+        --accent: #0b5f52;
+        --good: #e3f1ee;
+        --good-text: #0b5f52;
+        --warn: #fff1e8;
+        --warn-text: #7c2d12;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #101614;
+          --surface: #1a2321;
+          --text: #e8eeeb;
+          --muted: #9aa8a3;
+          --line: #2e3a36;
+          --accent: #4fb8a3;
+          --good: #17332d;
+          --good-text: #9fe0d2;
+          --warn: #3a2316;
+          --warn-text: #ffc9a8;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-family: 'Plus Jakarta Sans', system-ui, sans-serif;
+        -webkit-font-smoothing: antialiased;
+      }
+      #app {
+        max-width: 760px;
+        margin: 0 auto;
+        padding: 20px 16px 40px;
+      }
+      h1 {
+        margin: 0;
+        font-size: 24px;
+        font-weight: 800;
+      }
+      h2 {
+        margin: 24px 0 8px;
+        font-size: 16px;
+        font-weight: 800;
+      }
+      .muted {
+        color: var(--muted);
+        margin: 4px 0 0;
+      }
+      .small {
+        font-size: 13px;
+        margin: 0 0 8px;
+      }
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+        margin-top: 14px;
+      }
+      button {
+        font: inherit;
+        font-weight: 700;
+        height: 42px;
+        padding: 0 16px;
+        border-radius: 12px;
+        border: 1px solid var(--line);
+        background: var(--surface);
+        color: var(--text);
+        cursor: pointer;
+      }
+      button.primary {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: #fff;
+      }
+      button:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
+      button.link {
+        border: none;
+        background: none;
+        padding: 0;
+        height: auto;
+        margin-top: 10px;
+        color: var(--muted);
+        font-weight: 600;
+      }
+      .toggle {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-weight: 600;
+      }
+      .note {
+        margin: 10px 0 0;
+        font-weight: 600;
+        color: var(--accent);
+      }
+      .card {
+        margin: 18px 0 0;
+        padding: 14px 16px;
+        border-radius: 14px;
+        background: var(--surface);
+        line-height: 1.45;
+      }
+      .card.good {
+        background: var(--good);
+        color: var(--good-text);
+      }
+      .card.warn {
+        background: var(--warn);
+        color: var(--warn-text);
+      }
+      .table {
+        background: var(--surface);
+        border-radius: 14px;
+        overflow: hidden;
+      }
+      .row {
+        display: grid;
+        grid-template-columns: minmax(0, 2.2fr) repeat(4, minmax(0, 1fr));
+        gap: 8px;
+        align-items: center;
+        padding: 10px 14px;
+        border-top: 1px solid var(--line);
+        font-size: 14px;
+      }
+      .row:first-child {
+        border-top: none;
+      }
+      .row.th {
+        font-size: 12px;
+        font-weight: 700;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+      }
+      .row.kl {
+        color: var(--muted);
+      }
+      .row .err {
+        grid-column: span 4;
+        color: var(--warn-text);
+      }
+      .hit {
+        font-weight: 800;
+        color: var(--accent);
+      }
+      .bar {
+        display: inline-block;
+        width: 36px;
+        height: 6px;
+        margin-right: 6px;
+        border-radius: 3px;
+        background: var(--line);
+        vertical-align: middle;
+        overflow: hidden;
+      }
+      .bar i {
+        display: block;
+        height: 100%;
+        background: var(--accent);
+      }
+      @media (max-width: 520px) {
+        .row {
+          grid-template-columns: minmax(0, 1.6fr) repeat(4, minmax(0, 1fr));
+          font-size: 12px;
+          padding: 9px 10px;
+          gap: 6px;
+        }
+        .row.th {
+          font-size: 10px;
+        }
+        .bar {
+          display: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <!-- Dev-only page: not part of the built app, so the TomTom key never ships. -->
+    <main id="app"></main>
+    <script type="module" src="/src/trafficTest.ts"></script>
+  </body>
+</html>

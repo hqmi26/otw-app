@@ -23,17 +23,17 @@ const FLOWS: Flow[] = [
   {
     icon: <CarIcon size={20} />,
     title: 'Directions',
-    text: 'Your start, stop and destination go to the free Valhalla route service (Germany), or to OSRM (Germany) if Valhalla is busy, to work out the route.',
+    text: 'Your start, stop and destination go through OTW’s server to GrabMaps on Amazon (Malaysia), to work out the route. If that’s busy, they go to the free Valhalla or OSRM services (Germany) instead.',
   },
   {
     icon: <SearchIcon size={20} />,
     title: 'Search',
-    text: 'Places in Sabah are found on your phone. What you type, and roughly where you are, also go to Photon (Germany) to find places in the rest of Malaysia. A dropped pin outside Sabah goes there too, to find its name.',
+    text: 'Places in Sabah are found on your phone. What you type, and where you are, also go through OTW’s server to GrabMaps on Amazon (Malaysia), or roughly where you are to Photon (Germany) if that’s busy. A dropped pin goes the same way, to find its name.',
   },
   {
     icon: <PinIcon size={20} />,
     title: 'Map',
-    text: 'OpenFreeMap sends the map pictures for the part of the map on your screen.',
+    text: 'GrabMaps on Amazon (Malaysia) sends the map pictures for the part of the map on your screen, through OTW’s server. If that’s busy, OpenFreeMap sends them.',
   },
   {
     icon: <UsersIcon size={20} />,
@@ -125,6 +125,14 @@ export default function PrivacyScreen(p: Props) {
             , served by{' '}
             <a href="https://openfreemap.org/" target="_blank" rel="noopener noreferrer">
               OpenFreeMap
+            </a>
+            . GrabMaps map, search and routes come through{' '}
+            <a
+              href="https://docs.aws.amazon.com/location/latest/developerguide/data-attribution.html"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Amazon Location Service
             </a>
             .
           </p>

@@ -3,7 +3,7 @@ import type { LngLat } from './geo';
 import type { PlaceGroup } from './places';
 
 /** Shown in Account → About and added to feedback emails. */
-export const APP_VERSION = '0.5 · accounts and groups';
+export const APP_VERSION = '0.6 · accounts and groups';
 
 export interface Profile {
   /** The name groups see. Empty for a guest who skipped it. */

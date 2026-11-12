@@ -12,6 +12,7 @@ import AccountScreen from './components/AccountScreen';
 import GroupsScreen from './components/GroupsScreen';
 import NewGroupScreen from './components/NewGroupScreen';
 import GroupScreen from './components/GroupScreen';
+import CustomiseScreen from './components/CustomiseScreen';
 import PrivacyScreen from './components/PrivacyScreen';
 import ReportInfoSheet from './components/ReportInfoSheet';
 import { fetchReports, shareReport, voteReport } from './lib/reports';
@@ -35,6 +36,9 @@ import {
 } from './lib/geo';
 import { aheadPhrase, hazardPhrase, instruction, nextAction, PHRASES, worthSaying, type Lang } from './lib/instructions';
 import { rushHourFactor } from './lib/eta';
+import { DEFAULT_CAR, isCarLook, type CarLook } from './lib/car';
+import { canKeep, keepPlace } from './lib/grab';
+import { isMapDesign, type MapDesign } from './lib/mapStyle';
 import {
   HAZARDS,
   initials,
@@ -54,6 +58,7 @@ import { useGeolocation } from './hooks/useGeolocation';
 import { useArea, useGroups, useGroupSharing } from './hooks/useGroups';
 import { useTheme } from './hooks/useTheme';
 import { useRecents } from './hooks/useRecents';
+import { useGeoStatus } from './hooks/useGeoStatus';
 import { useStored } from './hooks/useStored';
 import { usePresence } from './hooks/usePresence';
 import { useNavProgress, useSimulatedDrive } from './hooks/useNavigation';
@@ -69,6 +74,7 @@ type Screen =
   | 'group'
   | 'account'
   | 'privacy'
+  | 'customise'
   | 'report'
   | 'save'
   | 'steps'
@@ -78,7 +84,7 @@ type Screen =
 /** Screens that open as a sheet over whatever is underneath. */
 const MODALS: Screen[] = ['report', 'save', 'steps', 'feedback', 'reportinfo'];
 /** Full-screen pages opened from home; home stays mounted underneath them. */
-const HOME_OVERLAYS: Screen[] = ['search', 'account', 'privacy', 'groups', 'newgroup', 'group', 'report', 'save', 'feedback'];
+const HOME_OVERLAYS: Screen[] = ['search', 'account', 'privacy', 'customise', 'groups', 'newgroup', 'group', 'report', 'save', 'feedback'];
 
 /**
  * Add ?sim to the address to fake the drive, e.g. testing on a laptop. It also
@@ -109,9 +115,13 @@ const NO_INSETS = { top: 0, bottom: 0 };
 const isArray = (v: unknown) => Array.isArray(v);
 
 export default function App() {
-  const { theme, toggle: toggleTheme } = useTheme();
   const geo = useGeolocation();
+  const { theme, toggle: toggleTheme, auto: autoTheme, setAuto: setAutoTheme } = useTheme(geo.fix?.coord ?? null);
   const { recents, add: addRecent } = useRecents();
+  const mapData = useGeoStatus();
+  const [mapDesign, setMapDesign] = useStored<MapDesign>('otw-map-design', 'standard', isMapDesign);
+  const [buildings3d, setBuildings3d] = useStored('otw-3d', true, (v) => typeof v === 'boolean');
+  const [car, setCar] = useStored<CarLook>('otw-car', DEFAULT_CAR, isCarLook);
   const [profile, setProfile] = useStored<Profile | null>('otw-profile', null, (v) => v == null || typeof v === 'object');
   // OTW used to ask for a phone number. It never left the phone, and it isn't needed any more.
   useEffect(() => {
@@ -210,6 +220,8 @@ export default function App() {
   const [placeToSave, setPlaceToSave] = useState<Place | null>(null);
   /** A stop on the way, e.g. fetching Adik from school on the way home. */
   const [stop, setStop] = useState<Place | null>(null);
+  /** The destination's name once it may be kept (GrabMaps results have to be asked for again). */
+  const [keptTrip, setKeptTrip] = useState<{ id: string; name: string } | null>(null);
   /** Your groups see the car move on this trip. Set before Start; off again after every trip. */
   const [shareLive, setShareLive] = useState(false);
   /** Normal groups that see this trip. Set before Start; empty again after every trip. */
@@ -280,7 +292,16 @@ export default function App() {
 
   const openRoute = (place: Place, remember = true) => {
     if (!origin) return;
-    if (remember) addRecent(place);
+    // A place that can't be kept is still driven to, just not listed in recents.
+    if (remember) {
+      keepPlace(place)
+        .then((kept) => {
+          if (!kept) return;
+          addRecent(kept);
+          setKeptTrip({ id: place.id, name: kept.name });
+        })
+        .catch(() => {});
+    }
     setDestination(place);
     setStop(null);
     fetchRoutes(origin, place, null);
@@ -345,7 +366,7 @@ export default function App() {
     spoken.current.clear();
     pace.current = null;
     tripFinished.current = false;
-    tripRush.current = rushHourFactor(new Date());
+    tripRush.current = route.traffic ? 1 : rushHourFactor(new Date());
     setActiveRoute(route);
     go('nav');
     if (!muted) {
@@ -360,9 +381,13 @@ export default function App() {
   };
 
   // --- Saved places ---
-  const savePlace = (label: string, kind: SavedKind) => {
+  const savePlace = async (label: string, kind: SavedKind) => {
     if (!placeToSave) return;
-    const place = placeToSave;
+    const place = await keepPlace(placeToSave).catch(() => null);
+    if (!place) {
+      showToast('Couldn’t save this place. Check your internet and try again.');
+      return;
+    }
     setSaved((list) => [
       ...list.filter((s) => s.label !== label && s.place.id !== place.id),
       { label, kind, place },
@@ -500,7 +525,8 @@ export default function App() {
     if (toTurn < 60 && !spoken.current.has(near)) {
       spoken.current.add(near);
       spoken.current.add(far);
-      speak(instruction(step, lang), lang);
+      // The arrival itself is said once, just above.
+      if (step.type !== 'arrive') speak(instruction(step, lang), lang);
     } else if (toTurn < 400 && !spoken.current.has(far)) {
       spoken.current.add(far);
       speak(aheadPhrase(toTurn, step, lang), lang);
@@ -697,10 +723,15 @@ export default function App() {
   const tripFinished = useRef(false);
   if (progress?.arrived) tripFinished.current = true;
   const tripHasViewers = canShare && (groups.family != null || shareWith.length > 0);
+  // The server keeps this name during the trip, so a GrabMaps name must be a kept one.
+  const tripNameForGroups =
+    savedAs ??
+    (destination && canKeep(destination) ? destination.name : null) ??
+    (keptTrip && keptTrip.id === destination?.id ? keptTrip.name : 'a place');
   // A demo drive (no GPS) isn't real, so groups don't see it, unless testing with ?sim.
   const tripShare =
     tripHasViewers && base === 'nav' && destination && progress && !tripFinished.current && remainingTime != null && (!simulate || FORCE_SIM)
-      ? { to: savedAs ?? destination.name, eta: Math.round(Date.now() / 1000 + remainingTime) }
+      ? { to: tripNameForGroups, eta: Math.round(Date.now() / 1000 + remainingTime) }
       : null;
   const liveShare =
     tripShare && shareLive && shownNavPos ? { lat: shownNavPos[1], lng: shownNavPos[0], heading: travelHeading } : null;
@@ -811,6 +842,7 @@ export default function App() {
   const groupsView = usePresence(phase === 'app' && base === 'groups');
   const newGroupView = usePresence(phase === 'app' && base === 'newgroup');
   const groupView = usePresence(phase === 'app' && base === 'group' && group != null);
+  const customiseView = usePresence(phase === 'app' && base === 'customise');
   const reportView = usePresence(phase === 'app' && top === 'report', 250);
   const reportInfoView = usePresence(phase === 'app' && top === 'reportinfo' && tappedReport != null, 250);
   const saveView = usePresence(phase === 'app' && top === 'save' && placeToSave != null, 250);
@@ -843,7 +875,11 @@ export default function App() {
   return (
     <div className="app" data-screen={base}>
       <MapView
-        theme={theme}
+        theme={mapData.grab && mapDesign === 'night' ? 'dark' : theme}
+        mapData={mapData}
+        mapDesign={mapDesign}
+        buildings3d={buildings3d}
+        car={car}
         mode={mapMode}
         position={base === 'nav' ? shownNavPos : realPos}
         heading={base === 'nav' ? navHeading : compass}
@@ -920,7 +956,7 @@ export default function App() {
               routes={routes}
               error={routeError}
               selected={selected}
-              rush={rushHourFactor(new Date())}
+              rush={routes?.[0]?.traffic ? 1 : rushHourFactor(new Date())}
               shareGroups={canShare ? normalGroups.map((g) => ({ id: g.id, name: g.name, on: shareWith.includes(g.id) })) : []}
               onToggleShareGroup={(id) =>
                 setShareWith((list) => (list.includes(id) ? list.filter((x) => x !== id) : [...list, id]))
@@ -977,7 +1013,7 @@ export default function App() {
 
           {searchView.mounted && (
             <SearchScreen
-              position={realPos}
+              position={origin}
               recents={recents}
               saved={saved}
               myPlaces={myPlaces}
@@ -993,14 +1029,13 @@ export default function App() {
           {accountView.mounted && (
             <AccountScreen
               profile={profile}
-              theme={theme}
               leaving={accountView.leaving ? leaveStyle : null}
               onSaveName={(name) => {
                 setProfile({ name });
                 void groups.update({ name }).catch(() => {});
                 showToast(`Saved! Your groups see you as ${name}`);
               }}
-              onToggleTheme={toggleTheme}
+              onCustomise={() => go('customise')}
               lang={lang}
               onLang={setLang}
               onTestVoice={(l) => speak(PHRASES.test[l], l, { repeat: true })}
@@ -1014,6 +1049,23 @@ export default function App() {
 
           {privacyView.mounted && (
             <PrivacyScreen leaving={privacyView.leaving ? leaveStyle : null} onBack={back} />
+          )}
+
+          {customiseView.mounted && (
+            <CustomiseScreen
+              theme={theme}
+              autoTheme={autoTheme}
+              mapDesign={mapData.grab ? mapDesign : null}
+              buildings3d={buildings3d}
+              car={car}
+              leaving={customiseView.leaving ? leaveStyle : null}
+              onToggleTheme={toggleTheme}
+              onAutoTheme={setAutoTheme}
+              onMapDesign={setMapDesign}
+              onBuildings3d={setBuildings3d}
+              onCar={setCar}
+              onBack={back}
+            />
           )}
 
           {groupsView.mounted && (

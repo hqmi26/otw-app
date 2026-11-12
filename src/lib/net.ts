@@ -1,6 +1,6 @@
 /*
- * Rush protection for the free services OTW calls straight from the phone
- * (Valhalla and OSRM for routes, Photon for search).
+ * Rush protection for the services OTW calls from the phone (GrabMaps through
+ * our server, and Valhalla, OSRM and Photon straight from the phone).
  *
  * When lots of people use OTW at once, these services get slow or answer "too
  * busy". Instead of hanging on "Finding routes…" (what happened to TuJu), each
@@ -39,7 +39,7 @@ function retryAfterMs(res: Response): number {
 export async function ask(
   service: string,
   url: string,
-  { signal, timeoutMs }: { signal?: AbortSignal; timeoutMs: number },
+  { signal, timeoutMs, init }: { signal?: AbortSignal; timeoutMs: number; init?: RequestInit },
 ): Promise<Response> {
   if ((pausedUntil.get(service) ?? 0) > Date.now()) throw new BusyError(service);
   const ctrl = new AbortController();
@@ -52,7 +52,7 @@ export async function ask(
     ctrl.abort();
   }, timeoutMs);
   try {
-    const res = await fetch(url, { signal: ctrl.signal });
+    const res = await fetch(url, { ...init, signal: ctrl.signal });
     if ([429, 502, 503, 504].includes(res.status)) {
       pause(service, retryAfterMs(res));
       throw new BusyError(service);

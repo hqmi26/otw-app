@@ -16,7 +16,7 @@ Matches the design canvas ("OTW – Family Navigation App"):
 - Sabah's places as coloured labels on the map (tap one for directions)
 - "Add a missing place": put a place search can't find on the map yourself (on this phone for now)
 - Save any place with the ⭐ on the route sheet or the "Add" chip
-- Directions with up to three routes to choose from, ETA and arrival time (Valhalla, OSRM as backup)
+- Directions with up to three routes to choose from, ETA and arrival time (GrabMaps once it's set up, Valhalla and OSRM as backups)
 - Turn-by-turn: next turn, "then…" hint, voice, mute, rerouting, screen stays on
   (also after coming back from WhatsApp, with a silent-video backup for phones that refuse)
 - The voice and turn card only speak up for real turns, not "continue on Jalan …"
@@ -131,6 +131,70 @@ python scripts/build_places.py
 Overture's data is free for commercial use (CDLA-Permissive-2.0, Apache-2.0, CC0) and
 OpenStreetMap's is ODbL; the map credit names both.
 
+## GrabMaps and live traffic (paid, switched on by keys)
+
+With `AWS_LOCATION_KEY` set on Cloudflare, OTW uses **GrabMaps through Amazon Location
+Service** for the map, place search, naming a dropped pin and routes
+(`functions/api/geo/[[path]].ts` and `src/lib/grab.ts`). Without the key, or when Amazon
+fails, everything below keeps working as before. The server keeps the key, so it never
+reaches the phone.
+
+**Customise** (Account → Customise, `src/components/CustomiseScreen.tsx`) groups the looks
+in one place: dark mode, map style, 3D buildings and your car. 3D is drawn by us from the
+heights in the tiles, because Amazon's own Buildings3D option refuses GrabMaps. It shows
+when the map tilts, as it does while driving, and only where the data has buildings.
+
+**Map style** picks how the GrabMaps map looks: Amazon's Standard or
+Monochrome, or our own styles from `src/lib/mapStyle.ts` on GrabMaps' tiles: OTW colours,
+Night drive (always dark) and Big text. Each phone remembers its own choice. On the free
+map there's only OTW's style, so the choice is hidden. Satellite isn't available for GrabMaps.
+
+Standard has Amazon's place icons. The other designs get OTW's own (`src/lib/poiIcons.ts`),
+drawn from the `poi` layer of the same tiles.
+
+**Auto day and night** turns dark mode on at sunset and off at sunrise,
+worked out from where the phone is (`sunIsDown` in `src/lib/geo.ts`), so it needs no service.
+
+The Petrol/Food/Surau/Parking chips ask GrabMaps too, but the Amazon console doesn't offer
+SearchNearby for a key, so for now Amazon refuses and the chips use our own Sabah list.
+
+**One-time setup** (needs a card, so only the owner can do it):
+
+1. Make an AWS account at https://signin.aws.amazon.com/signup?request_type=register and pick
+   the **Free** plan. New accounts get US$100 of credit, and up to US$100 more. Don't use the
+   "Builder ID" sign-up with projects: it puts Malaysian accounts in Sydney, which has no GrabMaps.
+2. **Account → AWS Regions → Asia Pacific (Malaysia) → Enable**. It can take a few minutes.
+3. **Billing → Budgets → Create budget**: a monthly budget of US$10 that emails you.
+4. Open the **Amazon Location** console in the Malaysia region → **API keys → Create API key**.
+   Allow GetTile, Suggest, SearchText, ReverseGeocode and CalculateRoutes.
+   Leave client restrictions empty, because the key is used from our server.
+5. Cloudflare: **Workers & Pages → otw-app → Settings → Variables and Secrets → Add**:
+   type **Secret**, name `AWS_LOCATION_KEY`, for Production and Preview. Then **Retry deployment**.
+
+To use a key on your computer, put `AWS_LOCATION_KEY=…` in a `.dev.vars` file (git ignores
+it) and run `npm run preview:cloudflare`.
+
+**Prices** (Malaysia region, Oct 2026, US$ per 1,000): map tiles 0.04, searches and the
+chips 0.50, routes 0.50, a place kept in saved or recents 4.00. The first 3 months include
+500,000 tiles, 10,000 routes and 10,000–20,000 searches a month.
+
+**Amazon's rules** (AWS Service Terms, section 82), and what they mean here:
+
+- Phone apps used in a car are allowed; systems built into the car are not.
+- Nothing from Amazon is cached or kept, unless it's asked for as Storage. A place only goes
+  into saved places or recents through `keepPlace`, and the server has no cache.
+- Amazon's data can't be mixed in a way that puts it under the ODbL. So it's never written
+  into `public/places/sabah.json`, and our OpenStreetMap labels aren't drawn on its map.
+- No company name or logo on the map, and keep the credit it comes with.
+- GrabMaps through Amazon has no opening hours, phone numbers, tolls or route incidents.
+
+**Traffic colours** need `TOMTOM_KEY`, set the same way. Leave it off until TomTom signs: the
+free key doesn't allow use in a turn-by-turn app (TomTom's terms, clause 2.1). Clause 11.4
+also bars caching, and clause 11.6.10 bars comparing it with competitors.
+
+At about 100,000 calls a day (roughly 300 users driving), Cloudflare's free Functions limit
+runs out, because every map tile passes through our server. Move to the paid plan (US$5 a month).
+
 ## Free services used (no API keys)
 
 | What | Service | Note |
@@ -142,10 +206,8 @@ OpenStreetMap's is ODbL; the map credit names both.
 | Feedback, reports, usage count, family | Cloudflare Pages Functions + D1 | Free tier |
 | Traffic lights | OpenStreetMap (Overpass), saved in `public/map/` | Refreshed by hand |
 
-For a public launch, run Photon and Valhalla on our own server in Malaysia so
-nobody's location leaves the country. None of these know about live traffic:
-the route times are for normal roads, with a rough rush-hour allowance
-(`src/lib/eta.ts`). Choosing the route with less jam needs live traffic (TomTom).
+These are the backups for GrabMaps. None of them know about live traffic: their
+route times are for normal roads, with a rough rush-hour allowance (`src/lib/eta.ts`).
 
 ## Code map
 
@@ -157,12 +219,14 @@ the route times are for normal roads, with a rough rush-hour allowance
 - `src/lib/voice.ts`, `src/lib/instructions.ts` – the spoken and shown turn instructions
 - `src/lib/keepAwake.ts` – keeps the screen on while driving
 - `src/lib/reports.ts`, `src/lib/visits.ts` – shared reports and the usage count (phone side)
+- `src/lib/grab.ts` – GrabMaps search and routes, through our server
 - `src/lib/places.ts` – loads and searches Sabah's place list on the phone
-- `src/lib/search.ts` – picks where a search goes: the user's own places, Sabah's list, or Photon
+- `src/lib/search.ts` – picks where a search goes: the user's own places, Sabah's list, then GrabMaps or Photon
 - `scripts/build_places.py` – builds Sabah's place list (run monthly by GitHub Actions)
 - `src/lib/geo.ts` – distance maths and formatting
 - `src/hooks/useNavigation.ts` – progress along the route and the demo drive
 - `functions/api/*` – feedback, family, reports and usage count (run on Cloudflare, not in the phone)
+- `functions/api/geo/[[path]].ts` – holds the Amazon and TomTom keys, and passes on the map, search and routes
 
 ## Next
 

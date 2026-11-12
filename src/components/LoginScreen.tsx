@@ -41,7 +41,7 @@ export default function LoginScreen({ onDone }: { onDone: (profile: Profile) => 
         Skip for now
       </button>
 
-      <p className="login-note">You’ll drive as a guest. No phone number and no password.</p>
+      <p className="login-note">OTW is in public testing. You’ll drive as a guest: no phone number and no password.</p>
     </form>
   );
 }

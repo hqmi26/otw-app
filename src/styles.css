@@ -187,8 +187,8 @@ textarea:focus-visible {
 .user-puck svg {
   width: 34px;
   height: 34px;
-  fill: #0e7c6b;
-  stroke: #0b5f52;
+  fill: var(--car, #0e7c6b);
+  stroke: color-mix(in srgb, var(--car, #0e7c6b) 78%, #000);
   stroke-width: 0.8;
   stroke-linejoin: round;
 }
@@ -1477,6 +1477,99 @@ textarea.input {
   background: var(--surface);
   color: var(--text);
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
+}
+
+.design-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.design-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 56px;
+  padding: 6px 12px;
+  border: 2px solid var(--line);
+  border-radius: 12px;
+  text-align: left;
+}
+
+.design-row svg {
+  flex-shrink: 0;
+  color: var(--accent);
+}
+
+.design-row.is-on {
+  border-color: var(--accent);
+  background: var(--sel-bg);
+}
+
+.car-shapes {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.car-shape {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 12px 4px 10px;
+  border: 2px solid var(--line);
+  border-radius: 12px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.car-shape.is-on {
+  border-color: var(--accent);
+  background: var(--sel-bg);
+  color: var(--text);
+}
+
+/* On a white disc, like the real marker, so black shows up in dark mode too. */
+.car-shape svg {
+  width: 46px;
+  height: 46px;
+  padding: 6px;
+  border-radius: 999px;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
+}
+
+.car-shape .glass,
+.user-puck .glass {
+  fill: rgba(255, 255, 255, 0.82);
+  stroke: none;
+}
+
+.car-colors {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.car-color {
+  width: 44px;
+  height: 44px;
+  border-radius: 999px;
+  border: 3px solid var(--surface);
+  box-shadow: 0 0 0 2px var(--line);
+}
+
+.car-color.is-on {
+  box-shadow: 0 0 0 3px var(--accent);
+}
+
+.switch:disabled {
+  opacity: 0.45;
 }
 
 .card.stack > .text-btn {
