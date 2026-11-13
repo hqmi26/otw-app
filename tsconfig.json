@@ -14,5 +14,5 @@
     "noUnusedParameters": true,
     "types": ["vite/client"]
   },
-  "include": ["src", "functions", "vite.config.ts"]
+  "include": ["src", "functions", "vite.config.ts", "capacitor.config.ts"]
 }

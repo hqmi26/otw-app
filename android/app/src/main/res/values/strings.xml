@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">OTW</string>
+    <string name="title_activity_main">OTW</string>
+    <string name="package_name">com.otwapp.malaysia</string>
+    <string name="custom_url_scheme">com.otwapp.malaysia</string>
+</resources>

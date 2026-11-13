@@ -1,4 +1,5 @@
 import { APP_VERSION } from './models';
+import { isNativeApp } from './native';
 
 export type FeedbackKind = 'idea' | 'bug' | 'other';
 
@@ -29,6 +30,7 @@ export const FEEDBACK_KINDS: { kind: FeedbackKind; label: string; question: stri
  */
 export async function sendFeedback(kind: FeedbackKind, message: string, from: string): Promise<void> {
   const installed = window.matchMedia('(display-mode: standalone)').matches;
+  const where = isNativeApp ? 'android app' : installed ? 'home screen app' : 'browser';
   const res = await fetch('/api/feedback', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -36,7 +38,7 @@ export async function sendFeedback(kind: FeedbackKind, message: string, from: st
       kind,
       message,
       name: from,
-      app: `${APP_VERSION} (${installed ? 'home screen app' : 'browser'})`,
+      app: `${APP_VERSION} (${where})`,
       screen: `${window.innerWidth}×${window.innerHeight}`,
       device: navigator.userAgent,
     }),

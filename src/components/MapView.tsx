@@ -19,6 +19,7 @@ import type { Place, Route } from '../lib/api';
 import { carSvg, type CarLook } from '../lib/car';
 import type { LngLat } from '../lib/geo';
 import type { GeoStatus } from '../lib/grab';
+import { SERVER_URL } from '../lib/native';
 import {
   buildMapStyle,
   designTextScale,
@@ -68,7 +69,7 @@ function styleFor(theme: Theme, grab: boolean, design: MapDesign) {
   if (!grab) return buildMapStyle(theme);
   if (design !== 'standard' && design !== 'monochrome') return buildMapStyle(theme, grabTiles(), design);
   const look = `scheme=${theme === 'dark' ? 'Dark' : 'Light'}&design=${design === 'monochrome' ? 'Monochrome' : 'Standard'}`;
-  return `${window.location.origin}${GRAB_STYLE_PATH}?${look}`;
+  return `${SERVER_URL}${GRAB_STYLE_PATH}?${look}`;
 }
 
 /** The font the style's own labels use: another style's font wouldn't draw. */
@@ -180,7 +181,7 @@ function addRouteLayers(map: MapLibreMap, theme: Theme, data: GeoStatus) {
   if (data.traffic) {
     map.addSource(TRAFFIC_SOURCE, {
       type: 'raster',
-      tiles: [`${window.location.origin}/api/geo/traffic/{z}/{x}/{y}`],
+      tiles: [`${SERVER_URL}/api/geo/traffic/{z}/{x}/{y}`],
       tileSize: 512,
       minzoom: 7,
       maxzoom: 18,

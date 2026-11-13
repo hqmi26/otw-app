@@ -1,4 +1,5 @@
 import type { LocationProblem } from '../hooks/useGeolocation';
+import { isNativeApp } from '../lib/native';
 import { OtwWordmark } from './brand';
 import { LocateIcon } from './icons';
 
@@ -37,7 +38,19 @@ export default function LocationScreen({ problem, onRetry }: Props) {
         {problem === 'denied' && (
           <>
             <p className="location-state">Location is blocked for OTW.</p>
-            {IS_IPHONE ? (
+            {isNativeApp ? (
+              <ol className="location-steps">
+                <li>
+                  Open your phone’s <b>Settings</b> → <b>Apps</b> → <b>OTW</b> → <b>Permissions</b> → <b>Location</b>.
+                </li>
+                <li>
+                  Choose <b>Allow only while using the app</b>.
+                </li>
+                <li>
+                  Come back here and tap <b>Try again</b>.
+                </li>
+              </ol>
+            ) : IS_IPHONE ? (
               <ol className="location-steps">
                 <li>
                   Open <b>Settings</b> → <b>Privacy &amp; Security</b> → <b>Location Services</b> and turn it on.

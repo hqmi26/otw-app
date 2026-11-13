@@ -1,6 +1,7 @@
 import type { MultiPolygon, Polygon } from 'geojson';
 import type { ExpressionSpecification, FilterSpecification, StyleSpecification, VectorSourceSpecification } from 'maplibre-gl';
 import type { Theme } from '../hooks/useTheme';
+import { SERVER_URL } from './native';
 import type { PlaceGroup } from './places';
 
 /*
@@ -34,7 +35,7 @@ const FREE_TILES: VectorSourceSpecification = {
 export function grabTiles(): VectorSourceSpecification {
   return {
     type: 'vector',
-    tiles: [`${window.location.origin}/api/geo/map/v2/tiles/vector.basemap/{z}/{x}/{y}`],
+    tiles: [`${SERVER_URL}/api/geo/map/v2/tiles/vector.basemap/{z}/{x}/{y}`],
     maxzoom: 14,
     attribution:
       '&copy; <a href="https://docs.aws.amazon.com/location/latest/developerguide/data-attribution.html" target="_blank">AWS</a>, <a href="https://www.grab.com/sg/terms-policies/transport-delivery-logistics/" target="_blank">Grab</a>, &copy; OpenMapTiles, &copy; OpenStreetMap contributors',

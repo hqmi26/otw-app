@@ -6,17 +6,23 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host",
+    "android": "npm run build && cap sync android && cap run android",
+    "android:apk": "npm run build && cap sync android && cd android && .\\gradlew.bat assembleDebug",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host",
     "preview:cloudflare": "vite build && npx --yes wrangler@4.149.0 pages dev dist --d1 DB=otw-feedback --d1 FAMILY_DB=otw-family --port 8788 --compatibility-date=2026-10-06",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@capacitor/android": "^8.6.0",
+    "@capacitor/app": "^8.1.2",
+    "@capacitor/core": "^8.6.0",
     "maplibre-gl": "^6.15.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"
   },
   "devDependencies": {
+    "@capacitor/cli": "^8.6.0",
     "@types/geojson": "^7946.0.16",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",

@@ -1,5 +1,6 @@
 import { areaNames, type AreaNames } from './api';
 import { distance, formatClock, type LngLat } from './geo';
+import { SERVER_URL } from './native';
 
 /**
  * Family sharing, talking to the OTW server (functions/api/family). Family see
@@ -91,7 +92,8 @@ export const familyApi = {
   leave: (token: string) => call<{ ok: true }>('leave', token, {}),
 };
 
-export const inviteLink = (code: string) => `${window.location.origin}/join/${code}`;
+/** Uses the server's address, because inside the Android app this page's own address is https://localhost. */
+export const inviteLink = (code: string) => `${SERVER_URL}/join/${code}`;
 
 export const inviteMessage = (code: string) =>
   `Jom join family kita dalam OTW, senang tengok ETA masing-masing. Tekan link ni: ${inviteLink(code)}`;

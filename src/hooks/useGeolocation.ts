@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { LngLat } from '../lib/geo';
+import { isNativeApp } from '../lib/native';
 
 export interface Fix {
   coord: LngLat;
@@ -42,7 +43,7 @@ export function useGeolocation() {
         setProblem(denied ? 'denied' : 'unavailable');
         setError(
           denied
-            ? 'Location is off. Allow it in your browser to see where you are.'
+            ? `Location is off. Allow it in your ${isNativeApp ? 'phone’s settings' : 'browser'} to see where you are.`
             : 'Can’t find your location right now.',
         );
       },

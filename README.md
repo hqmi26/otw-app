@@ -52,6 +52,14 @@ Open https://otw-app-eoz.pages.dev on the phone and use **Add to Home Screen**
 
 Cloudflare Pages settings: build command `npm run build`, output folder `dist`.
 
+## Android app
+
+OTW also builds as a real Android app with Capacitor. See [docs/android.md](docs/android.md).
+
+```bash
+npm run android
+```
+
 ## Feedback
 
 "Send feedback" posts to `functions/api/feedback.ts`, which Cloudflare Pages runs
