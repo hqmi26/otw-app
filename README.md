@@ -133,14 +133,17 @@ Google button.
    `https://otw-app-eoz.pages.dev`, plus `http://localhost`, `http://localhost:8788` and
    `http://localhost:8799` for testing on this computer. No redirect address is needed.
 4. Copy the **Client ID** (it ends in `.apps.googleusercontent.com`). It isn't a secret.
-5. **Audience → Publish app**, or only the test users listed there can sign in. Sign-in that
-   only asks for name and email needs no review from Google.
+5. **Audience → Test users**: add the accounts that may try it. Until the app is published,
+   only those can sign in; anyone else sees "Access blocked". To publish, first fill in
+   **Branding** (home page, privacy policy link, authorised domain), then **Audience → Publish
+   app**. Sign-in that only asks for name and email needs no review from Google.
 6. Cloudflare: **Workers & Pages → otw-app → Settings → Variables and Secrets → Add**, type
    **Text**, name `GOOGLE_CLIENT_ID`, for Production. Then **Retry deployment**.
 
 On this computer, put `GOOGLE_CLIENT_ID=…` in `.dev.vars` (ignored by git) and run
-`npm run preview:cloudflare`. Google only accepts the exact addresses listed in step 3, so
-the button doesn't work on preview links, which get a new address each time.
+`npm run preview:cloudflare`. Open it in Chrome: Google signs in through a pop-up, which the
+browser built into the Claude app blocks. Google only accepts the exact addresses listed in
+step 3, so the button doesn't work on preview links, which get a new address each time.
 
 **Counting them:** D1 → `otw-family` → **Console**, then
 
