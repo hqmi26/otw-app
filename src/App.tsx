@@ -818,16 +818,18 @@ export default function App() {
   }, [top, groups.state, group, back]);
 
   // --- Leaving: both tell the server first, so "done" is never said when it wasn't. ---
+  // `done` decides when a new account may be made again: straight away after
+  // logging out, never after deleting (the page reloads).
   const closeAccount = async (action: () => Promise<void>, failed: string, done: () => void) => {
     setClosing(true);
     try {
       await action();
-      done();
     } catch {
       showToast(failed);
-    } finally {
       setClosing(false);
+      return;
     }
+    done();
   };
   const logOut = () => {
     const warning = signedIn
@@ -844,6 +846,7 @@ export default function App() {
       backTo(0);
       setProfile(null);
       setPhase('login');
+      setClosing(false);
     });
   };
   /** Google's answer after "Sign in with Google", from the Account page or the welcome screen. */

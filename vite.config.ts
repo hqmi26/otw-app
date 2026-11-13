@@ -9,4 +9,6 @@ export default defineConfig({
   // The project lives in OneDrive, where normal file watching can miss changes.
   server: { allowedHosts, watch: { usePolling: true, interval: 300 } },
   preview: { allowedHosts },
+  // The public Privacy & data page (/privacy) is built next to the app.
+  build: { rollupOptions: { input: { main: 'index.html', privacy: 'privacy.html' } } },
 });
