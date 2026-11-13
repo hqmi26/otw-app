@@ -22,8 +22,8 @@ interface Props {
   following: boolean;
   /** The nearest reported hazard on the road ahead, in metres. */
   hazardAhead: { type: HazardType; distance: number } | null;
-  /** Family can see the car move (Share live trip is on). */
-  sharingLive: boolean;
+  /** Who was asked to see this trip, e.g. family or a normal group. Null if nobody. */
+  sharingWith: string | null;
   onRecenter: () => void;
   /** Zoom out to the rest of the route; it comes back to the car by itself. */
   onOverview: () => void;
@@ -78,10 +78,11 @@ export default function NavigationView(p: Props) {
           </span>
         )}
         {p.rerouting && <span className="chip">Finding a new route…</span>}
-        {p.sharingLive && !p.hazardAhead && !p.rerouting && (
+        {p.sharingWith && !p.hazardAhead && !p.rerouting && (
           <span className="chip chip-family">
             <UsersIcon size={16} />
-            {p.lang === 'ms' ? 'Family nampak trip anda' : 'Family can see your trip'}
+            {p.sharingWith.charAt(0).toUpperCase() + p.sharingWith.slice(1)}{' '}
+            {p.lang === 'ms' ? 'nampak trip anda' : 'can see your trip'}
           </span>
         )}
         {p.demoSpeed != null && (
@@ -159,7 +160,7 @@ export default function NavigationView(p: Props) {
             </h2>
             <p className="row-sub wrap">
               You’ve arrived at {p.destination.name}.
-              {p.sharingLive && ' Live trip turned off: family see your area only.'}
+              {p.sharingWith && ' Trip sharing is off now.'}
             </p>
             <button type="button" className="primary-btn" onClick={p.onEnd}>
               Done

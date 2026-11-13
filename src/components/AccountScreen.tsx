@@ -1,10 +1,18 @@
-import { useState } from 'react';
-import { APP_VERSION, initials, type Profile } from '../lib/models';
+import { useEffect, useState } from 'react';
+import { APP_VERSION, initials, shownName, type Profile } from '../lib/models';
 import type { Lang } from '../lib/instructions';
 import { BackIcon, ChatIcon, LockIcon, MoonIcon, SoundIcon } from './icons';
+import GoogleSignIn from './GoogleSignIn';
 
 interface Props {
   profile: Profile;
+  /** Null until the server has answered. */
+  login: { signedIn: boolean; email: string | null } | null;
+  /** Null when Google sign-in isn't set up. */
+  googleClientId: string | null;
+  dark: boolean;
+  getGoogleNonce: () => Promise<string>;
+  onGoogle: (credential: string) => Promise<void>;
   lang: Lang;
   leaving: 'pop' | 'fade' | null;
   onSaveName: (name: string) => void;
@@ -14,17 +22,15 @@ interface Props {
   onFeedback: () => void;
   onPrivacy: () => void;
   onLogout: () => void;
+  onDelete: () => void;
   onBack: () => void;
-}
-
-function maskPhone(digits: string) {
-  // Family who joined from an invite link only gave a name.
-  return digits ? `+60 ••• •••• ${digits.slice(-4)}` : 'Joined with a family invite';
 }
 
 /** Account (design screen 7). */
 export default function AccountScreen(p: Props) {
   const [name, setName] = useState(p.profile.name);
+  // Signing in can bring a name with it.
+  useEffect(() => setName(p.profile.name), [p.profile.name]);
   const clean = name.trim();
 
   return (
@@ -38,14 +44,43 @@ export default function AccountScreen(p: Props) {
 
       <div className="page-body">
         <div className="card profile-card">
-          <span className="avatar big">{initials(p.profile.name)}</span>
+          <span className="avatar big">{initials(shownName(p.profile))}</span>
           <span className="row-text">
-            <span className="profile-name">{p.profile.name}</span>
-            <span className="row-sub">{maskPhone(p.profile.phone)}</span>
+            <span className="profile-name">{shownName(p.profile)}</span>
+            <span className="row-sub">
+              {p.login?.signedIn ? (p.login.email ?? 'Signed in with Google') : 'Guest account on this phone'}
+            </span>
           </span>
         </div>
 
-        <h2 className="section-label">Username</h2>
+        {p.login?.signedIn && (
+          <p className="privacy-note">
+            <LockIcon size={18} />
+            Your groups and saved places are kept with this account. On a new phone, sign in with Google to get them
+            back.
+          </p>
+        )}
+
+        {p.login && !p.login.signedIn && p.googleClientId && (
+          <>
+            <h2 className="section-label">Keep your account</h2>
+            <div className="card stack">
+              <p className="card-text">
+                Right now your account lives only on this phone. Sign in with Google to get your groups and saved
+                places back on a new phone.
+              </p>
+              <GoogleSignIn
+                clientId={p.googleClientId}
+                dark={p.dark}
+                getNonce={p.getGoogleNonce}
+                onCredential={p.onGoogle}
+              />
+              <span className="field-hint">No password. OTW keeps only your email address from Google.</span>
+            </div>
+          </>
+        )}
+
+        <h2 className="section-label">Your name</h2>
         <form
           className="card stack"
           onSubmit={(e) => {
@@ -54,7 +89,7 @@ export default function AccountScreen(p: Props) {
           }}
         >
           <label className="field-label" htmlFor="acc-name">
-            Name your family sees
+            Name your groups see
           </label>
           <div className="inline-field">
             <input
@@ -71,7 +106,7 @@ export default function AccountScreen(p: Props) {
               Save
             </button>
           </div>
-          <span className="field-hint">Shows on the map and in Family. Max 20 letters.</span>
+          <span className="field-hint">Shows on the map and in your groups. Max 20 letters.</span>
         </form>
 
         <h2 className="section-label">Appearance</h2>
@@ -162,6 +197,9 @@ export default function AccountScreen(p: Props) {
 
         <button type="button" className="logout-btn" onClick={p.onLogout}>
           Log out
+        </button>
+        <button type="button" className="text-btn danger center" onClick={p.onDelete}>
+          Delete account
         </button>
       </div>
     </div>
