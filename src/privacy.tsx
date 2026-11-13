@@ -1,6 +1,6 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-import './styles.css';
+import './privacy.css';
 import PrivacyContent from './components/PrivacyContent';
 import { OtwWordmark } from './components/brand';
 
