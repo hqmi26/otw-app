@@ -8,7 +8,8 @@ Family navigation web app (phase 1). Works in the phone's browser and can be add
 
 Matches the design canvas ("OTW – Family Navigation App"):
 
-- Logo intro, then a first-time login (name + phone, kept on the phone for now)
+- Logo intro, then a welcome screen: type a name or skip it. No sign-up and no phone
+  number; every phone gets a hidden ID on our server
 - Our own map style (`src/lib/mapStyle.ts`) in OTW colours, light and dark
 - Home: search bar with your avatar, saved-place chips (Rumah, Rumah Atuk…), locate, Report, family panel
 - Search with Petrol / Food / Surau / Parking chips, saved places and recents. In Sabah it
@@ -26,9 +27,13 @@ Matches the design canvas ("OTW – Family Navigation App"):
 - Raised 3D buildings in the driving view, and traffic-light icons at Sabah junctions
 - Report a hazard or a speed camera: shown to every OTW driver nearby without a name,
   for 2 hours (cameras 30 days); tap one for "Still there?" (kept on the phone if offline)
-- Family sharing: family see your area (never the exact spot) and trip ETA, a live car
-  only with "Share live trip"; invite link; Private switch
-- Account: change username, dark mode switch, Privacy & data page, log out
+- Groups: a family group sees your area (never the exact spot) and trip ETA; a normal
+  group sees nothing until you share a trip with it before Start. A live car only with
+  "Share live trip"; invite links; one Private switch for every group; the person who
+  started a group can remove people
+- Sign in with Google (Account, or "Used OTW before?" on the welcome screen) to get your
+  account, groups and saved places back on a new phone
+- Account: change your name, Customise, Privacy & data page, log out of this phone, delete account
 - Send feedback (home panel or Account): ideas and bug reports are saved for you to review
 - Rush protection: a slow or busy route/search service is skipped for a minute instead of
   leaving the app stuck on "Finding routes…" (`src/lib/net.ts`)
@@ -93,6 +98,55 @@ to set up; their tables make themselves.
 ```sql
 SELECT day, kind, device, count FROM visits ORDER BY day DESC, kind;
 SELECT type, note, datetime(created_at, 'unixepoch', '+8 hours') AS at, ups, downs FROM reports ORDER BY created_at DESC;
+```
+
+## Accounts, groups and Google sign-in
+
+Everything lives in the `otw-family` D1 database, bound to the Pages project as `FAMILY_DB`
+for Production and Preview. The tables make themselves (`db/family.sql` lists them), and the
+server is `functions/api/account/[[path]].ts`.
+
+- Every phone gets a hidden ID (`users`) and a secret key (only its SHA-256 is kept, in
+  `devices`). Someone who drives alone has nothing else there.
+- Groups are `groups` and `group_members`; each person's latest area, trip and live car is one
+  row in `user_status`, overwritten as it changes and cleared on arrival.
+- Signing in with Google adds Google's ID for the account and its verified email to `users`.
+  Only then are saved places and added places kept on the server, in `user_places`.
+- Delete account erases all of that at once. Log out removes this phone's key; a guest with
+  no sign-in and no other phone is erased too, so nobody is left behind in a group.
+
+**Moving the public test's families.** The public test kept families in `families` and
+`members`. The first request on the live address after this goes live moves them into the new
+tables in one step: same people, same invite links, same phone keys, so nobody has to join
+again. The old rows are emptied in the same step, so it can't run twice. It never runs from a
+preview link, because preview links share the live database. `functions/api/family` stays as a
+small route that tells an app left open since before the update to reopen.
+
+**Setting up Google sign-in.** Without `GOOGLE_CLIENT_ID` the app works as before, just with no
+Google button.
+
+1. Go to [console.cloud.google.com](https://console.cloud.google.com) signed in as the OTW
+   Google account, and create a project called OTW.
+2. **Google Auth Platform → Get started**: app name OTW, the OTW email for support and contact,
+   audience **External**.
+3. **Clients → Create client → Web application**. Under **Authorized JavaScript origins** add
+   `https://otw-app-eoz.pages.dev`, plus `http://localhost`, `http://localhost:8788` and
+   `http://localhost:8799` for testing on this computer. No redirect address is needed.
+4. Copy the **Client ID** (it ends in `.apps.googleusercontent.com`). It isn't a secret.
+5. **Audience → Publish app**, or only the test users listed there can sign in. Sign-in that
+   only asks for name and email needs no review from Google.
+6. Cloudflare: **Workers & Pages → otw-app → Settings → Variables and Secrets → Add**, type
+   **Text**, name `GOOGLE_CLIENT_ID`, for Production. Then **Retry deployment**.
+
+On this computer, put `GOOGLE_CLIENT_ID=…` in `.dev.vars` (ignored by git) and run
+`npm run preview:cloudflare`. Google only accepts the exact addresses listed in step 3, so
+the button doesn't work on preview links, which get a new address each time.
+
+**Counting them:** D1 → `otw-family` → **Console**, then
+
+```sql
+SELECT COUNT(*) AS people, COUNT(google_id) AS signed_in FROM users;
+SELECT type, COUNT(*) AS groups FROM groups GROUP BY type;
 ```
 
 ## Traffic lights
@@ -225,11 +279,15 @@ route times are for normal roads, with a rough rush-hour allowance (`src/lib/eta
 - `scripts/build_places.py` – builds Sabah's place list (run monthly by GitHub Actions)
 - `src/lib/geo.ts` – distance maths and formatting
 - `src/hooks/useNavigation.ts` – progress along the route and the demo drive
-- `functions/api/*` – feedback, family, reports and usage count (run on Cloudflare, not in the phone)
+- `functions/api/*` – feedback, accounts and groups, reports and usage count (run on Cloudflare, not in the phone)
+- `functions/api/account/[[path]].ts` – accounts, groups, Google sign-in, saved places of signed-in accounts
+- `server/google.ts` – checks Google's sign-in answer (signature, made for OTW, not expired, asked for by this phone)
+- `src/lib/groups.ts`, `src/hooks/useGroups.ts` – accounts and groups (phone side); `src/hooks/usePlaceSync.ts` keeps saved places with a signed-in account
+- `src/lib/googleSignIn.ts`, `src/components/GoogleSignIn.tsx` – Google's button, fetched only when someone taps "Sign in with Google"
 - `functions/api/geo/[[path]].ts` – holds the Amazon and TomTom keys, and passes on the map, search and routes
 
 ## Next
 
 1. Live traffic routes with TomTom (waiting for the navigation licence)
-2. Saved places across phones
+2. Sign in with an email link, for people without a Google account (needs OTW's own domain)
 3. Android app with Capacitor
