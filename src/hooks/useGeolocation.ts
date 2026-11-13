@@ -1,6 +1,9 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { LngLat } from '../lib/geo';
-import { isNativeApp } from '../lib/native';
+import { isNativeApp, OtwDrive } from '../lib/native';
+
+/** Two sources at once would make the car jitter, so Android's fixes win while they keep coming. */
+const NATIVE_FRESH_MS = 3000;
 
 export interface Fix {
   coord: LngLat;
@@ -20,6 +23,8 @@ export function useGeolocation() {
   const [error, setError] = useState<string | null>(null);
   const [problem, setProblem] = useState<LocationProblem | null>(null);
   const [attempt, setAttempt] = useState(0);
+  /** When Android's trip service last sent a fix (ms). While these are fresh, the page's own fixes are skipped. */
+  const lastNativeFix = useRef(0);
 
   useEffect(() => {
     if (!('geolocation' in navigator)) {
@@ -29,6 +34,8 @@ export function useGeolocation() {
     }
     const id = navigator.geolocation.watchPosition(
       (p) => {
+        // During a trip in the Android app, Android's own fixes are used instead (see below).
+        if (Date.now() - lastNativeFix.current < NATIVE_FRESH_MS) return;
         setError(null);
         setProblem(null);
         setFix({
@@ -51,6 +58,19 @@ export function useGeolocation() {
     );
     return () => navigator.geolocation.clearWatch(id);
   }, [attempt]);
+
+  // The Android app, during a trip: Android reads the GPS itself and sends each fix
+  // here, because the page's own GPS feed stops when OTW isn't on screen.
+  useEffect(() => {
+    if (!isNativeApp) return;
+    const listening = OtwDrive.addListener('fix', (f) => {
+      lastNativeFix.current = Date.now();
+      setError(null);
+      setProblem(null);
+      setFix({ coord: [f.lng, f.lat], accuracy: f.accuracy, heading: f.heading, speed: f.speed });
+    });
+    return () => void listening.then((l) => l.remove());
+  }, []);
 
   // Start again by itself when the user allows location in the browser's settings.
   useEffect(() => {

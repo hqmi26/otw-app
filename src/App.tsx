@@ -51,6 +51,7 @@ import {
 import { inviteCodeFromPath, memberColor, type FamilyMember } from './lib/family';
 import { speak, stopSpeaking } from './lib/voice';
 import { keepScreenOn, letScreenSleep } from './lib/keepAwake';
+import { isNativeApp, OtwDrive } from './lib/native';
 import { countOpen, countTrip } from './lib/visits';
 import { useGeolocation } from './hooks/useGeolocation';
 import { useArea, useFamily, useFamilySharing } from './hooks/useFamily';
@@ -590,6 +591,17 @@ export default function App() {
     keepScreenOn();
     return letScreenSleep;
   }, [base]);
+
+  // The Android app: keep GPS and voice going for the whole trip, even with the
+  // screen off or another app open. A demo drive has no GPS to keep.
+  const tripName = destination?.name;
+  useEffect(() => {
+    if (!isNativeApp || base !== 'nav' || simulate) return;
+    void OtwDrive.startTrip({ title: 'OTW is guiding your trip', text: tripName ? `To ${tripName}` : '' }).catch(() => {
+      // Android refused (location taken away, say): the trip still works while OTW is on screen.
+    });
+    return () => void OtwDrive.stopTrip().catch(() => {});
+  }, [base, simulate, tripName]);
 
   // --- Hazard reports: shared with every OTW driver nearby (no names). One that
   // couldn't be sent (offline) stays on this phone. ---

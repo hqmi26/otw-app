@@ -11,6 +11,11 @@ a fix in `src/` fixes both.
 | `src/lib/native.ts` | What the app needs that the website gets for free |
 | `functions/api/_middleware.ts` | Lets the app talk to OTW's server |
 | `assets/` | The source pictures for the app icon and splash screen |
+| `android/.../Voice.java` | Speaks directions with the phone's own voice, and lowers music while it does |
+| `android/.../DriveService.java` | Runs during a trip, so GPS and voice carry on with the screen off or another app open. Shows the "OTW is guiding your trip" notification |
+| `android/.../OtwDrivePlugin.java` | How the pages ask Android for those two things. The pages call it `OtwDrive` (`src/lib/native.ts`) |
+
+The three Java files are in `android/app/src/main/java/com/otwapp/malaysia/`.
 
 The app's pages are stored inside it, so it opens without signal and doesn't need
 an update from Google Play for every server change. Page changes do need a new
@@ -57,43 +62,58 @@ npx --yes @capacitor/assets@4.0.0 generate --android --assetPath assets --iconBa
 
 ## What was tested
 
-On 1 Nov and again on 13 Nov 2026, on an Android 16 emulator. No real phone was
-plugged in either time, so **nothing here has been tried on a real phone yet**.
-The 13 Nov run used the version after PR #6, with GrabMaps and family sharing.
+On an Android 16 emulator (1, 13 and 14 Nov 2026), and on 14 Nov on a real
+OnePlus 15 running Android 17. The phone sat still indoors, so **nothing here
+has been tried on a real drive yet**. All of it used the practice server.
 
-| Feature | Result |
-|---|---|
-| Opens with OTW's name, icon and splash | Works |
-| Asks for location, then shows the GPS dot | Works |
-| Map, search, route, turn-by-turn | Works on GrabMaps, and on the free services |
-| Family: start a family, invite link | Works. The link carries the server's address, not the app's own |
-| Refusing location | Works: shows the phone's Settings steps, and recovers after allowing |
-| Send feedback | Works, tested on the practice database |
-| Phone's Back button | Works: goes back a screen, and leaves from Home |
-| Opens with no internet | Works |
-| Screen stays on | The feature responds; not timed on a long drive |
-| Send ETA | Passes the right message to Android. WhatsApp itself wasn't tested, because the emulator doesn't have it |
-| Compass | **Not tested.** An emulator doesn't move |
-| Voice directions | **Doesn't work yet** |
+| Feature | Emulator | OnePlus 15 |
+|---|---|---|
+| Opens with OTW's name, icon and splash | Works | Works |
+| Asks for location, then shows the GPS dot | Works | Works |
+| Map, search, route, turn-by-turn | Works on GrabMaps, and on the free services | Map, search and route work. Turn-by-turn not driven |
+| Voice directions | Android reports each line as said. Nobody listened | English and Malay lines said to the end. **Ask a person whether they sounded right** |
+| Trip carries on with the screen off | Works: followed the road, re-routed and spoke | **Not tested.** The phone ignores key presses sent over USB |
+| Trip carries on with another app open | Not tested | Works: GPS fixes kept coming and a line was spoken |
+| Ending a trip stops the service | Works | Works |
+| Family: start a family, invite link | Works. The link carries the server's address, not the app's own | Not tested |
+| Refusing location | Works: shows the phone's Settings steps, and recovers after allowing | Not tested |
+| Send feedback | Works, tested on the practice database | Not tested |
+| Phone's Back button | Works: goes back a screen, and leaves from Home | Not tested |
+| Opens with no internet | Works | Not tested |
+| Screen stays on | The feature responds; not timed on a long drive | Not tested |
+| Send ETA | Passes the right message to Android | Not tested |
+| Compass | **Not tested.** An emulator doesn't move | Not tested |
 
-When testing through the debug port, press buttons with a real tap
-(`adb shell input tap`). A click made by script doesn't count as a touch, so
-Android's Back then leaves the app instead of going back a screen.
+Testing notes:
+
+- Through the debug port, press buttons with a real tap (`adb shell input tap`).
+  A click made by script doesn't count as a touch, so Android's Back then leaves
+  the app instead of going back a screen.
+- The OnePlus 15 refuses `adb shell pm grant` and ignores `adb shell input
+  keyevent`, so permissions and the power button need a person. To put OTW in
+  the background from the PC, open the home screen with
+  `adb shell am start -a android.intent.action.MAIN -c android.intent.category.HOME`.
+- A phone lying still gets a GPS fix only every 5 to 8 seconds. That's Android
+  saving power, not a fault.
+- The emulator's voice takes up to 9 seconds to say its first line. The phone
+  starts in under a second.
 
 ## Next jobs
 
-1. **Voice (the big one).** Android apps have no `speechSynthesis`, so OTW drives
-   silently. Add `@capacitor-community/text-to-speech` and use it in
-   `src/lib/voice.ts`.
-2. **Driving with the screen off.** GPS stops when OTW is in the background. This
-   needs an Android foreground service. Family "always on" sharing needs background
-   location on top of that, which Google Play makes you justify in a declaration.
-3. **Real phone test.** Try the OnePlus 15 and Tab S11 Ultra: compass, real GPS,
-   WhatsApp, a long drive, and a phone call or the screen going off mid-trip.
+1. **A real drive.** Voice timing, the screen going off mid-trip, a phone call
+   mid-trip, the compass, WhatsApp, and how much battery a long trip uses.
+2. **End the trip service after arriving.** It runs until End is tapped. If the
+   driver forgets, it keeps the GPS on; the phone is only held awake for 6 hours
+   at most.
+3. **The start line is cut off.** When the first turn is close, "In 50 metres…"
+   interrupts "Jom! Let's go". The website does the same.
 4. **Invite links open the website, not the app.** Someone with the app who taps a
    family link joins in their browser. Opening the app needs Android App Links.
 5. **Android's share menu.** `@capacitor/share` would let Copy link open the
    phone's share menu.
+6. **Family "always on" sharing** needs background location, which Google Play
+   makes you justify in a declaration. The trip service doesn't need it, because
+   it starts while OTW is on screen.
 
 Any `/api` address handed to the map must start with `SERVER_URL` from
 `src/lib/native.ts`, not `window.location.origin`. The map downloads tiles in a

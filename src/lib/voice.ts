@@ -1,4 +1,5 @@
 import type { Lang } from './instructions';
+import { isNativeApp, OtwDrive } from './native';
 
 /*
  * Speaks navigation instructions with the phone's built-in voice.
@@ -9,9 +10,13 @@ import type { Lang } from './instructions';
  * gets one retry. The same line twice within a few seconds (e.g. right after a
  * reroute) is said once, and a queued line that waited too long is dropped,
  * because "accident in 600 metres" is no longer true a minute later.
+ *
+ * The Android app's pages have no voice of their own, so there Android speaks
+ * instead (OtwDrive in native.ts). The queue and the rules above stay the same.
  */
 
-const supported = typeof window !== 'undefined' && 'speechSynthesis' in window;
+const webSpeech = !isNativeApp && typeof window !== 'undefined' && 'speechSynthesis' in window;
+const supported = isNativeApp || webSpeech;
 
 /** The same words again within this long add nothing. */
 const REPEAT_WINDOW_MS = 10_000;
@@ -19,9 +24,11 @@ const REPEAT_WINDOW_MS = 10_000;
 const STALE_MS = 20_000;
 /** A line that hasn't started by now is stuck. */
 const START_TIMEOUT_MS = 2_500;
+/** In the Android app: a line that hasn't ended by now is stuck. No direction takes this long to say. */
+const NATIVE_TIMEOUT_MS = 20_000;
 
 // Chrome loads its voice list late; asking once early makes it ready by the first turn.
-if (supported) window.speechSynthesis.getVoices();
+if (webSpeech) window.speechSynthesis.getVoices();
 
 function pickVoice(lang: Lang): SpeechSynthesisVoice | undefined {
   const voices = window.speechSynthesis.getVoices();
@@ -48,14 +55,14 @@ interface Line {
 }
 
 let queue: Line[] = [];
-/** The utterance being said now; anything from an older one is ignored. */
-let current: SpeechSynthesisUtterance | null = null;
+/** The line being said now (in the Android app, just a marker for it); anything from an older one is ignored. */
+let current: object | null = null;
 let watchdog = 0;
 let lastSaid = { text: '', at: 0 };
 /** Goes up on every stopSpeaking(), so a retry from before it is dropped. */
 let generation = 0;
 
-function finish(u: SpeechSynthesisUtterance) {
+function finish(u: object) {
   if (current !== u) return;
   window.clearTimeout(watchdog);
   current = null;
@@ -70,6 +77,7 @@ function next() {
 }
 
 function say(line: Line, attempt: number) {
+  if (isNativeApp) return sayNative(line, attempt);
   const synth = window.speechSynthesis;
   const u = new SpeechSynthesisUtterance(line.text);
   const voice = attempt === 0 ? pickVoice(line.lang) : undefined; // the retry uses the default voice
@@ -115,6 +123,29 @@ function retry(u: SpeechSynthesisUtterance, line: Line) {
   }, 200);
 }
 
+/** The Android app's way of saying a line: Android speaks it and tells us when it ends. */
+function sayNative(line: Line, attempt: number) {
+  const marker = {};
+  current = marker;
+  lastSaid = { text: line.text, at: Date.now() };
+  const failed = () => {
+    if (current !== marker) return; // cut off on purpose
+    if (lastSaid.text === line.text) lastSaid = { text: '', at: 0 };
+    if (attempt > 0) return finish(marker);
+    window.clearTimeout(watchdog);
+    current = null;
+    const gen = generation;
+    window.setTimeout(() => {
+      if (gen !== generation) return;
+      if (!current) sayNative(line, 1);
+      else queue.unshift(line);
+    }, 200);
+  };
+  OtwDrive.speak({ text: line.text, lang: line.lang }).then(({ said }) => (said ? finish(marker) : failed()), failed);
+  window.clearTimeout(watchdog);
+  watchdog = window.setTimeout(() => finish(marker), NATIVE_TIMEOUT_MS);
+}
+
 /**
  * Cuts off whatever is being said, unless `queue` is set: then it waits its turn.
  * `repeat` says it even if the same words were just said (e.g. the "Play a sample" button).
@@ -139,5 +170,6 @@ export function stopSpeaking() {
   queue = [];
   window.clearTimeout(watchdog);
   current = null;
-  window.speechSynthesis.cancel();
+  if (isNativeApp) void OtwDrive.stopSpeaking().catch(() => {});
+  else window.speechSynthesis.cancel();
 }
