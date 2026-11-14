@@ -1,0 +1,7 @@
+/*
+ * The public privacy page's look: the app's own styles, pulled in here
+ * rather than shared with the app. If both pages imported styles.css, the
+ * build would split it into a shared file that loads before the map's own
+ * styles, and the map's rules would then win over ours (a blank map).
+ */
+@import './styles.css';

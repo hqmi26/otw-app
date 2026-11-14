@@ -15,8 +15,13 @@ interface Props {
   selected: number;
   /** Rush-hour slow-down for leaving now (1 = normal traffic). */
   rush: number;
-  /** "Share live trip with family" switch; null hides it (no family, or on Private). */
+  /** Normal groups this trip could be shared with; empty hides the row (none, or on Private). */
+  shareGroups: { id: string; name: string; on: boolean }[];
+  onToggleShareGroup: (id: string) => void;
+  /** "Share live trip" switch; null hides it (nobody would see it, or on Private). */
   shareLive: boolean | null;
+  /** Who sees the car, e.g. family. */
+  shareLiveWith: string;
   onToggleShareLive: () => void;
   onSelect: (index: number) => void;
   onStart: () => void;
@@ -145,12 +150,32 @@ export default function RouteSheet(p: Props) {
           </div>
         )}
 
+        {p.shareGroups.length > 0 && (
+          <div className="share-groups">
+            <span className="row-title">Share this trip with</span>
+            <div className="share-groups-list">
+              {p.shareGroups.map((g) => (
+                <button
+                  type="button"
+                  key={g.id}
+                  className={`share-group${g.on ? ' is-on' : ''}`}
+                  aria-pressed={g.on}
+                  onClick={() => p.onToggleShareGroup(g.id)}
+                >
+                  {g.name}
+                </button>
+              ))}
+            </div>
+            <span className="row-sub wrap">They see where you’re going and your ETA. Off when you arrive.</span>
+          </div>
+        )}
+
         {p.shareLive != null && (
           <div className="setting-row share-live">
             <UsersIcon size={20} className="muted" />
             <span className="row-text">
               <span id="share-live" className="row-title">
-                Share live trip with family
+                Share live trip with {p.shareLiveWith}
               </span>
               <span className="row-sub wrap">They see your car move. Off when you arrive.</span>
             </span>

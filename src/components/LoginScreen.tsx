@@ -1,24 +1,35 @@
 import { useState, type FormEvent } from 'react';
 import type { Profile } from '../lib/models';
 import { OtwWordmark } from './brand';
+import GoogleSignIn from './GoogleSignIn';
 
-/** First-time setup (design screen 0b). Accounts stay on this phone until family sharing is built. */
-export default function LoginScreen({ onDone }: { onDone: (profile: Profile) => void }) {
+interface Props {
+  onDone: (profile: Profile) => void;
+  /** Sign-in for someone who used OTW before. Null hides it (not set up, or no answer from the server). */
+  google: {
+    clientId: string;
+    dark: boolean;
+    getNonce: () => Promise<string>;
+    onCredential: (credential: string) => Promise<void>;
+  } | null;
+}
+
+/** First-time welcome (design screen 0b). No sign-up: the name can wait until you join a group. */
+export default function LoginScreen({ onDone, google }: Props) {
   const [name, setName] = useState('');
-  const [phone, setPhone] = useState('');
-  const digits = phone.replace(/\D/g, '').replace(/^0/, '');
-  const valid = name.trim().length >= 2 && digits.length >= 9 && digits.length <= 10;
+  const clean = name.trim();
+  const valid = clean.length >= 2;
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
-    if (valid) onDone({ name: name.trim(), phone: digits });
+    if (valid) onDone({ name: clean });
   };
 
   return (
     <form className="screen login" onSubmit={submit}>
       <OtwWordmark />
-      <h1 className="login-title">Jom, log in</h1>
-      <p className="login-lead">Log in untuk share lokasi dan ETA dengan family anda.</p>
+      <h1 className="login-title">Jom, mula</h1>
+      <p className="login-lead">Tak perlu sign up. Letak nama anda, atau terus guna OTW.</p>
 
       <label className="field-label" htmlFor="login-name">
         Nama
@@ -33,31 +44,23 @@ export default function LoginScreen({ onDone }: { onDone: (profile: Profile) => 
         value={name}
         onChange={(e) => setName(e.target.value)}
       />
-      <span className="field-hint">This is the name your family sees.</span>
-
-      <label className="field-label" htmlFor="login-phone">
-        No. telefon
-      </label>
-      <span className="phone-field">
-        <span className="phone-prefix">+60</span>
-        <input
-          id="login-phone"
-          type="tel"
-          inputMode="numeric"
-          autoComplete="tel-national"
-          placeholder="12 345 6789"
-          value={phone}
-          onChange={(e) => setPhone(e.target.value)}
-        />
-      </span>
+      <span className="field-hint">The name your groups see. You can change it later.</span>
 
       <button type="submit" className="primary-btn login-btn" disabled={!valid}>
         Teruskan
       </button>
+      <button type="button" className="text-btn center login-skip" onClick={() => onDone({ name: '' })}>
+        Skip for now
+      </button>
 
-      <p className="login-note">
-        OTW is in public testing. Your name and number stay on this phone.
-      </p>
+      {google && (
+        <div className="login-google">
+          <span className="field-label">Used OTW before?</span>
+          <GoogleSignIn {...google} />
+        </div>
+      )}
+
+      <p className="login-note">OTW is in public testing. You’ll drive as a guest: no phone number and no password.</p>
     </form>
   );
 }

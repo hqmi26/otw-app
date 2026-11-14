@@ -3,13 +3,14 @@ import type { LngLat } from './geo';
 import type { PlaceGroup } from './places';
 
 /** Shown in Account → About and added to feedback emails. */
-export const APP_VERSION = '0.5 · public test';
+export const APP_VERSION = '0.6 · accounts and groups';
 
 export interface Profile {
+  /** The name groups see. Empty for a guest who skipped it. */
   name: string;
-  /** Digits after +60, as typed. Empty for family who joined from an invite link. */
-  phone: string;
 }
+
+export const shownName = (profile: Profile) => profile.name || 'Guest';
 
 export type SavedKind = 'home' | 'family' | 'school' | 'work' | 'other';
 
