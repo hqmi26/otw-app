@@ -18,7 +18,8 @@ export const onRequest = async ({ request, next }: Context) => {
       headers: {
         'access-control-allow-origin': APP_ORIGIN,
         'access-control-allow-methods': '*',
-        'access-control-allow-headers': '*',
+        // Named, not '*': browsers never let '*' cover authorization, which carries the account's pass.
+        'access-control-allow-headers': 'authorization, content-type',
         'access-control-max-age': '86400',
       },
     });

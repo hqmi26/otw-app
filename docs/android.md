@@ -72,10 +72,12 @@ has been tried on a real drive yet**. All of it used the practice server.
 | Asks for location, then shows the GPS dot | Works | Works |
 | Map, search, route, turn-by-turn | Works on GrabMaps, and on the free services | Map, search and route work. Turn-by-turn not driven |
 | Voice directions | Android reports each line as said. Nobody listened | English and Malay lines said to the end. **Ask a person whether they sounded right** |
+| Music gets quieter while OTW speaks | Not tested | Android's records show OTW asking for it correctly while a line is said. **Not heard with music playing yet** |
 | Trip carries on with the screen off | Works: followed the road, re-routed and spoke | **Not tested.** The phone ignores key presses sent over USB |
 | Trip carries on with another app open | Not tested | Works: GPS fixes kept coming and a line was spoken |
 | Ending a trip stops the service | Works | Works |
-| Family: start a family, invite link | Works. The link carries the server's address, not the app's own | Not tested |
+| Accounts and groups (14 Nov, after PR #7): guest account, start a group, invite link | Works. The link carries the server's address, not the app's own | Not tested |
+| Google sign-in | **Hidden in the app.** Google's web button doesn't work inside an app | Hidden |
 | Refusing location | Works: shows the phone's Settings steps, and recovers after allowing | Not tested |
 | Send feedback | Works, tested on the practice database | Not tested |
 | Phone's Back button | Works: goes back a screen, and leaves from Home | Not tested |
@@ -83,6 +85,19 @@ has been tried on a real drive yet**. All of it used the practice server.
 | Screen stays on | The feature responds; not timed on a long drive | Not tested |
 | Send ETA | Passes the right message to Android | Not tested |
 | Compass | **Not tested.** An emulator doesn't move | Not tested |
+
+Also on 14 Nov, on a Samsung Tab S11 Ultra (Android 17): it installs, opens,
+reaches the server, shows the GrabMaps map and GPS dot, and speaks. It opens in
+landscape, because Android ignores the portrait setting on tablets, so the
+screens are the phone ones stretched wide. Nothing overlaps, but it isn't a
+tablet design.
+
+**Music and the voice.** A tester on the website reported that directions play
+over their music at the same volume, where Google Maps makes the music give way.
+A website can't change another app's sound, so that can't be fixed there. The
+app can: `Voice.java` asks Android for the sound as navigation guidance each time
+it speaks, and Android then turns other apps down until the line ends. To check
+it by ear, play a song, open Account and tap Play a sample.
 
 Testing notes:
 
@@ -93,6 +108,11 @@ Testing notes:
   keyevent`, so permissions and the power button need a person. To put OTW in
   the background from the PC, open the home screen with
   `adb shell am start -a android.intent.action.MAIN -c android.intent.category.HOME`.
+- A phone can hold two OTW icons that look the same: this app, and the website
+  saved to the home screen from Chrome. Nothing inside OTW says which is which;
+  the phone's Settings → Apps lists the real app as `com.otwapp.malaysia`. A test
+  build also looks old when it can't reach its server, because it falls back to
+  the free map.
 - A phone lying still gets a GPS fix only every 5 to 8 seconds. That's Android
   saving power, not a fault.
 - The emulator's voice takes up to 9 seconds to say its first line. The phone
@@ -107,11 +127,15 @@ Testing notes:
    at most.
 3. **The start line is cut off.** When the first turn is close, "In 50 metres…"
    interrupts "Jom! Let's go". The website does the same.
-4. **Invite links open the website, not the app.** Someone with the app who taps a
+4. **Google sign-in in the app.** It needs Android's own sign-in (Credential
+   Manager) and an Android client in Google Cloud. Until then the app only has
+   guest accounts, so saved places don't follow you to a new phone.
+5. **Invite links open the website, not the app.** Someone with the app who taps a
    family link joins in their browser. Opening the app needs Android App Links.
-5. **Android's share menu.** `@capacitor/share` would let Copy link open the
+6. **Android's share menu.** `@capacitor/share` would let Copy link open the
    phone's share menu.
-6. **Family "always on" sharing** needs background location, which Google Play
+7. **A tablet layout.** On a tablet the screens are the phone ones stretched wide.
+8. **Family "always on" sharing** needs background location, which Google Play
    makes you justify in a declaration. The trip service doesn't need it, because
    it starts while OTW is on screen.
 

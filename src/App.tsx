@@ -159,9 +159,10 @@ export default function App() {
   const placeSync = usePlaceSync(groups, saved, setSaved, myPlaces, setMyPlaces);
   const signedIn = groups.state?.login.signedIn ?? false;
   // The welcome screen offers sign-in to someone who used OTW before. Asked for there, not on every open.
+  // Not in the Android app yet: Google's web button doesn't work inside an app, which needs Android's own sign-in.
   const [welcomeClientId, setWelcomeClientId] = useState<string | null>(null);
   useEffect(() => {
-    if (phase !== 'login') return;
+    if (phase !== 'login' || isNativeApp) return;
     let alive = true;
     accountApi.config().then(
       (c) => alive && setWelcomeClientId(c.googleClientId),
@@ -1077,7 +1078,7 @@ export default function App() {
             <AccountScreen
               profile={profile}
               login={groups.state?.login ?? null}
-              googleClientId={groups.state?.googleClientId ?? null}
+              googleClientId={isNativeApp ? null : (groups.state?.googleClientId ?? null)}
               dark={theme === 'dark'}
               getGoogleNonce={groups.nonceForGoogle}
               onGoogle={signInWithGoogle}

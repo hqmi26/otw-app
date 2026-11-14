@@ -114,7 +114,10 @@ public class OtwDrivePlugin extends Plugin {
             .putExtra(DriveService.EXTRA_TITLE, call.getString("title"))
             .putExtra(DriveService.EXTRA_TEXT, call.getString("text"));
         try {
-            ContextCompat.startForegroundService(context, intent);
+            // A plain start, not startForegroundService: a trip always starts while OTW is on screen,
+            // which allows it, and the service then shows its notification when it's ready. The
+            // other way, Android closes the whole app if a busy phone takes over ten seconds to get there.
+            context.startService(intent);
             call.resolve();
         } catch (RuntimeException e) {
             call.reject("Android wouldn't start the trip service", e);
