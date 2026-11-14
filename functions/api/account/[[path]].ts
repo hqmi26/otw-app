@@ -96,6 +96,12 @@ const LIVE_STALE_S = 3 * 60;
 const TRIP_STALE_S = 30 * 60;
 /** New hidden IDs each phone (by IP, kept only in memory) can ask for a minute. */
 const GUESTS_PER_MINUTE = 20;
+/**
+ * Wrong or expired invite codes each phone (by IP) may try an hour. A person
+ * mistyping a link stays well under this; a script guessing codes to find
+ * other people's groups is stopped after a handful.
+ */
+const WRONG_CODES_PER_HOUR = 20;
 /** The most saved places and added places kept with an account, and their size as text. */
 const MAX_SAVED = 50;
 const MAX_MY_PLACES = 200;
@@ -227,19 +233,36 @@ function bearer(request: Request): string | null {
   return m ? m[1] : null;
 }
 
-// Rate limit kept in memory only, per server instance: enough to stop a script
-// filling the database, and nothing about anyone is stored.
-const recentGuests = new Map<string, number[]>();
-function allowGuest(request: Request): boolean {
-  const ip = request.headers.get('cf-connecting-ip') ?? 'unknown';
-  const t = Date.now();
-  const list = (recentGuests.get(ip) ?? []).filter((x) => t - x < 60_000);
-  if (list.length >= GUESTS_PER_MINUTE) return false;
-  list.push(t);
-  recentGuests.set(ip, list);
-  if (recentGuests.size > 5000) recentGuests.delete(recentGuests.keys().next().value!);
-  return true;
+// Rate limits kept in memory only, per server instance: enough to stop a
+// script, and nothing about anyone is stored.
+class Limit {
+  private readonly seen = new Map<string, number[]>();
+  constructor(
+    private readonly max: number,
+    private readonly windowMs: number,
+  ) {}
+
+  private recent(request: Request): { ip: string; list: number[] } {
+    const ip = request.headers.get('cf-connecting-ip') ?? 'unknown';
+    const t = Date.now();
+    return { ip, list: (this.seen.get(ip) ?? []).filter((x) => t - x < this.windowMs) };
+  }
+
+  /** True while this phone is still under the limit. */
+  open(request: Request): boolean {
+    return this.recent(request).list.length < this.max;
+  }
+
+  count(request: Request) {
+    const { ip, list } = this.recent(request);
+    list.push(Date.now());
+    this.seen.set(ip, list);
+    if (this.seen.size > 5000) this.seen.delete(this.seen.keys().next().value!);
+  }
 }
+
+const newGuests = new Limit(GUESTS_PER_MINUTE, 60_000);
+const wrongCodes = new Limit(WRONG_CODES_PER_HOUR, 3_600_000);
 
 /** The person this phone's token belongs to, or null. */
 async function findUser(db: D1Database, token: string | null): Promise<UserRow | null> {
@@ -264,12 +287,19 @@ async function myGroupTypes(db: D1Database, userId: string): Promise<GroupType[]
   return results.map((r) => r.type);
 }
 
-async function groupByCode(db: D1Database, code: unknown): Promise<GroupRow> {
+/** The group behind an invite code. Wrong codes count against this phone, so codes can't be guessed. */
+async function groupByCode(db: D1Database, code: unknown, request: Request): Promise<GroupRow> {
+  if (!wrongCodes.open(request)) {
+    throw new HttpError(429, 'Too many wrong invite links from this connection. Try again in an hour');
+  }
   const clean = text(code, 12).toUpperCase();
   const group = clean
     ? await db.prepare('SELECT * FROM groups WHERE invite_code = ?').bind(clean).first<GroupRow>()
     : null;
-  if (!group || group.invite_expires_at < now()) throw new HttpError(404, 'This invite link has expired');
+  if (!group || group.invite_expires_at < now()) {
+    wrongCodes.count(request);
+    throw new HttpError(404, 'This invite link has expired');
+  }
   return group;
 }
 
@@ -604,7 +634,8 @@ async function handle(db: D1Database, env: Env, method: string, path: string[], 
 
   // A new driver: a hidden ID and this phone's key. Nothing about the person.
   if (method === 'POST' && action === 'guest') {
-    if (!allowGuest(request)) throw new HttpError(429, 'Too many new accounts from here. Try again in a minute.');
+    if (!newGuests.open(request)) throw new HttpError(429, 'Too many new accounts from here. Try again in a minute.');
+    newGuests.count(request);
     const id = crypto.randomUUID();
     const token = randomToken();
     await db.batch([
@@ -616,7 +647,7 @@ async function handle(db: D1Database, env: Env, method: string, path: string[], 
 
   // What's behind an invite link, for the invite page. Names only.
   if (method === 'GET' && action === 'invite' && arg) {
-    const group = await groupByCode(db, arg);
+    const group = await groupByCode(db, arg, request);
     const { results } = await db
       .prepare(
         `SELECT m.user_id, u.name FROM group_members m JOIN users u ON u.id = m.user_id
@@ -758,7 +789,7 @@ async function handle(db: D1Database, env: Env, method: string, path: string[], 
     const data = await readJson(request);
     const name = text(data.name, 20) || me.name;
     if (!name) throw new HttpError(400, 'Missing name');
-    const group = await groupByCode(db, data.code);
+    const group = await groupByCode(db, data.code, request);
     const { results: members } = await db
       .prepare('SELECT user_id FROM group_members WHERE group_id = ?')
       .bind(group.id)
