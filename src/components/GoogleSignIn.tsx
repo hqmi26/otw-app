@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
 import { showGoogleButton } from '../lib/googleSignIn';
+import { isNativeApp, OtwGoogle } from '../lib/native';
 
 interface Props {
   clientId: string;
@@ -34,7 +35,30 @@ export default function GoogleSignIn(p: Props) {
     }
   };
 
+  // The Android app: Android's own account picker, then the same check on OTW's server.
+  const startInApp = async () => {
+    setStage('loading');
+    setError(null);
+    let credential: string;
+    try {
+      ({ credential } = await OtwGoogle.signIn({ clientId: p.clientId, nonce: await p.getNonce() }));
+    } catch (e) {
+      const code = (e as { code?: string }).code;
+      if (code !== 'CANCELLED')
+        setError(
+          code === 'NO_ACCOUNT'
+            ? 'Add a Google account to this phone first, in Settings → Accounts.'
+            : 'Couldn’t reach Google. Try again.',
+        );
+      setStage('idle');
+      return;
+    }
+    await finish(credential);
+    setStage('idle');
+  };
+
   const start = async () => {
+    if (isNativeApp) return startInApp();
     if (!slot.current || !wrap.current) return;
     setStage('loading');
     setError(null);

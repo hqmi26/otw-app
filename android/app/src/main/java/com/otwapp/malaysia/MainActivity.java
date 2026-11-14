@@ -10,6 +10,7 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(OtwDrivePlugin.class);
+        registerPlugin(OtwGooglePlugin.class);
         super.onCreate(savedInstanceState);
         // Android slows an app's pages right down when they aren't on screen. During a
         // trip they still have to follow the route and choose what to say.

@@ -41,6 +41,15 @@ export const OtwDrive = registerPlugin<{
   addListener(event: 'fix', heard: (fix: NativeFix) => void): Promise<PluginListenerHandle>;
 }>('OtwDrive');
 
+/**
+ * Sign in with Google in the Android app (android/.../OtwGooglePlugin.java), through
+ * Android's own account picker, because Google's web button can't work in an app.
+ * Rejects with code CANCELLED when the person closes the picker.
+ */
+export const OtwGoogle = registerPlugin<{
+  signIn(ask: { clientId: string; nonce: string }): Promise<{ credential: string }>;
+}>('OtwGoogle');
+
 if (isNativeApp) {
   // Sends the app's /api calls to the server, so the code making them stays the same as on the website.
   const realFetch = window.fetch.bind(window);

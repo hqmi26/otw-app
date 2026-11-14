@@ -77,7 +77,7 @@ has been tried on a real drive yet**. All of it used the practice server.
 | Trip carries on with another app open | Not tested | Works: GPS fixes kept coming and a line was spoken |
 | Ending a trip stops the service | Works | Works |
 | Accounts and groups (14 Nov, after PR #7): guest account, start a group, invite link | Works. The link carries the server's address, not the app's own | Not tested |
-| Google sign-in | **Hidden in the app.** Google's web button doesn't work inside an app | Hidden |
+| Google sign-in (Android's own account picker) | Button shows; Android answers. The emulator has no Google account, so it stops at a clear message | Not tried yet |
 | Refusing location | Works: shows the phone's Settings steps, and recovers after allowing | Not tested |
 | Send feedback | Works, tested on the practice database | Not tested |
 | Phone's Back button | Works: goes back a screen, and leaves from Home | Not tested |
@@ -127,9 +127,12 @@ Testing notes:
    at most.
 3. **The start line is cut off.** When the first turn is close, "In 50 metres…"
    interrupts "Jom! Let's go". The website does the same.
-4. **Google sign-in in the app.** It needs Android's own sign-in (Credential
-   Manager) and an Android client in Google Cloud. Until then the app only has
-   guest accounts, so saved places don't follow you to a new phone.
+4. **Finish Google sign-in in the app.** `OtwGooglePlugin.java` uses Android's
+   own account picker. Google only answers an app it knows, so Google Cloud
+   project otw-app-514615 needs an Android client for `com.otwapp.malaysia` with
+   the SHA-1 of each key the app is signed with (this PC's debug key now, the
+   Play key later; `gradlew signingReport` prints it). The server it talks to also
+   needs `GOOGLE_CLIENT_ID`, which the branch preview doesn't have yet.
 5. **Invite links open the website, not the app.** Someone with the app who taps a
    family link joins in their browser. Opening the app needs Android App Links.
 6. **Android's share menu.** `@capacitor/share` would let Copy link open the
